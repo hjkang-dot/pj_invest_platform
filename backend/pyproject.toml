@@ -1,0 +1,14 @@
+[project]
+name = "pj-invest-platform-backend"
+version = "0.1.0"
+description = "Integrated Trading Platform Backend"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn>=0.28.0",
+    "pandas>=2.2.0",
+    "numpy>=1.26.0",
+    "requests>=2.31.0",
+    "python-dotenv>=1.0.1"
+]
