@@ -1,18 +1,9 @@
 import React from "react";
 import { 
-  TrendingUp, 
-  TrendingDown, 
-  HelpCircle, 
-  Sparkles, 
-  Layers, 
   AlertCircle, 
   ChevronRight, 
-  Activity, 
-  ArrowUpRight,
   Shield,
-  Coins,
-  DollarSign,
-  Briefcase
+  Coins
 } from "lucide-react";
 
 export interface StrategyItem {

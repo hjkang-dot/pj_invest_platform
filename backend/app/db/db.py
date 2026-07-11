@@ -313,6 +313,31 @@ def init_db(db_path=DB_PATH):
         )
     """)
     
+    # Create macro_indicators table (For macroeconomic timeseries data)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS macro_indicators (
+            trade_date TEXT,
+            series_id TEXT,
+            value REAL,
+            PRIMARY KEY (trade_date, series_id)
+        )
+    """)
+    
+    # Create macro_calendar table (For macroeconomic calendar schedule & actuals)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS macro_calendar (
+            event_date TEXT,
+            event_time TEXT,
+            country TEXT,
+            event_name TEXT,
+            impact TEXT,
+            actual TEXT,
+            forecast TEXT,
+            previous TEXT,
+            PRIMARY KEY (event_date, event_name, country)
+        )
+    """)
+    
     conn.commit()
     conn.close()
     print(f"[DB] Database initialized successfully at: {db_path}")
@@ -868,4 +893,134 @@ def get_last_timestamp(contract, interval, db_path=DB_PATH):
     if row and row[0] is not None:
         return int(row[0])
     return 0
+
+
+# ==================== CFTC COT & MACRO HELPER FUNCTIONS ====================
+
+def save_cftc_cot(rows: list, db_path=DB_PATH) -> int:
+    """
+    Saves or updates CFTC COT records in database.
+    Each row should be a tuple/list: (trade_date, contract_code, contract_name, open_interest, noncommercial_long, noncommercial_short, commercial_long, commercial_short)
+    """
+    if not rows:
+        return 0
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.executemany("""
+        INSERT OR REPLACE INTO cftc_cot (
+            trade_date, contract_code, contract_name,
+            open_interest, noncommercial_long, noncommercial_short,
+            commercial_long, commercial_short
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, rows)
+    conn.commit()
+    conn.close()
+    return len(rows)
+
+def get_cftc_cot(contract_code: str, limit: int = 52, db_path=DB_PATH) -> list:
+    """
+    Retrieves COT positioning history sorted by date ascending.
+    """
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT trade_date, contract_code, contract_name,
+               open_interest, noncommercial_long, noncommercial_short,
+               commercial_long, commercial_short
+        FROM cftc_cot
+        WHERE contract_code = ?
+        ORDER BY trade_date DESC LIMIT ?
+    """, (contract_code, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    
+    result = []
+    for r in reversed(rows):
+        net_spec = r["noncommercial_long"] - r["noncommercial_short"]
+        result.append({
+            "date": r["trade_date"],
+            "contractCode": r["contract_code"],
+            "contractName": r["contract_name"],
+            "openInterest": r["open_interest"],
+            "noncommLong": r["noncommercial_long"],
+            "noncommShort": r["noncommercial_short"],
+            "commLong": r["commercial_long"],
+            "commShort": r["commercial_short"],
+            "netPosition": net_spec
+        })
+    return result
+
+def save_macro_indicators(rows: list, db_path=DB_PATH) -> int:
+    """
+    Saves or updates macroeconomic indicator values.
+    Each row should be a tuple/list: (trade_date, series_id, value)
+    """
+    if not rows:
+        return 0
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.executemany("""
+        INSERT OR REPLACE INTO macro_indicators (trade_date, series_id, value)
+        VALUES (?, ?, ?)
+    """, rows)
+    conn.commit()
+    conn.close()
+    return len(rows)
+
+def get_macro_indicators(series_ids: list, limit: int = 120, db_path=DB_PATH) -> dict:
+    """
+    Retrieves macroeconomic indicator values grouped by series_id.
+    """
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    result = {}
+    for sid in series_ids:
+        cursor.execute("""
+            SELECT trade_date, value FROM macro_indicators
+            WHERE series_id = ?
+            ORDER BY trade_date DESC LIMIT ?
+        """, (sid, limit))
+        rows = cursor.fetchall()
+        result[sid] = [{"date": r["trade_date"], "value": r["value"]} for r in reversed(rows)]
+        
+    conn.close()
+    return result
+
+def save_macro_calendar(rows: list, db_path=DB_PATH) -> int:
+    """
+    Saves or updates macroeconomic calendar schedules.
+    Each row should be a tuple: (event_date, event_time, country, event_name, impact, actual, forecast, previous)
+    """
+    if not rows:
+        return 0
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.executemany("""
+        INSERT OR REPLACE INTO macro_calendar (
+            event_date, event_time, country, event_name, impact, actual, forecast, previous
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, rows)
+    conn.commit()
+    conn.close()
+    return len(rows)
+
+def get_macro_calendar(start_date: str, end_date: str, db_path=DB_PATH) -> list:
+    """
+    Retrieves macroeconomic calendar events within a date range.
+    """
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT event_date, event_time, country, event_name, impact, actual, forecast, previous
+        FROM macro_calendar
+        WHERE event_date >= ? AND event_date <= ?
+        ORDER BY event_date ASC, event_time ASC
+    """, (start_date, end_date))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 

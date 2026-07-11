@@ -11,18 +11,18 @@ import type { Transaction } from "./components/TransactionEntry";
 import { AssetMonitor } from "./components/AssetMonitor";
 import { StockExplorer } from "./components/StockExplorer";
 import { StockDetail } from "./components/StockDetail";
-import { RefreshCw, ShieldCheck, LayoutDashboard, Compass, PlusCircle, Search } from "lucide-react";
+import { MacroDashboard } from "./components/MacroDashboard";
+import { RefreshCw, ShieldCheck, LayoutDashboard, Compass, PlusCircle, Search, Globe } from "lucide-react";
 
 function App() {
   const [refreshing, setRefreshing] = useState(false);
-  const [currentView, setCurrentView] = useState<"DASHBOARD" | "STRATEGY_LIST" | "STRATEGY_DETAIL" | "TRANSACTION_ENTRY" | "STOCK_EXPLORER" | "STOCK_DETAIL">("DASHBOARD");
+  const [currentView, setCurrentView] = useState<"DASHBOARD" | "STRATEGY_LIST" | "STRATEGY_DETAIL" | "TRANSACTION_ENTRY" | "STOCK_EXPLORER" | "STOCK_DETAIL" | "MACRO_DASHBOARD">("DASHBOARD");
   const [selectedStrategyId, setSelectedStrategyId] = useState<string | null>(null);
   const [selectedStockCode, setSelectedStockCode] = useState<string | null>(null);
 
   // Dynamic Portfolio States fetched from Backend API
   const [dashboardData, setDashboardData] = useState<any>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [loading, setLoading] = useState(true);
 
   // Fetch Dashboard and Transactions
   const fetchPortfolioData = async () => {
@@ -40,8 +40,6 @@ function App() {
       }
     } catch (e) {
       console.error("Failed to fetch portfolio data:", e);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -206,6 +204,21 @@ function App() {
               <Search size={14} />
               종목 탐색
             </button>
+            <button
+              onClick={() => {
+                setCurrentView("MACRO_DASHBOARD");
+                setSelectedStrategyId(null);
+                setSelectedStockCode(null);
+              }}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                currentView === "MACRO_DASHBOARD"
+                  ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/10 shadow-sm shadow-cyan-500/5"
+                  : "text-slate-400 hover:text-slate-200 border border-transparent"
+              }`}
+            >
+              <Globe size={14} />
+              거시경제 분석
+            </button>
           </div>
           
           <div className="flex items-center gap-3 self-stretch md:self-auto justify-between md:justify-start">
@@ -300,6 +313,10 @@ function App() {
                 setSelectedStockCode(null);
               }} 
             />
+          )}
+
+          {currentView === "MACRO_DASHBOARD" && (
+            <MacroDashboard />
           )}
         </main>
 

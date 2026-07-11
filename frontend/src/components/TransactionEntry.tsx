@@ -3,14 +3,7 @@ import {
   PlusCircle, 
   Trash2, 
   DollarSign, 
-  Calendar, 
-  Sliders, 
-  Layers, 
-  FileText,
-  TrendingUp,
-  Coins,
-  Shield,
-  Briefcase
+  FileText
 } from "lucide-react";
 
 export interface Transaction {

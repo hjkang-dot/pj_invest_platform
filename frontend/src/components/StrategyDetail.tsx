@@ -4,9 +4,7 @@ import {
   BarChart3, 
   Sliders, 
   Layers, 
-  Info,
-  ArrowUpRight,
-  TrendingDown
+  Info
 } from "lucide-react";
 
 interface StrategyDetailProps {

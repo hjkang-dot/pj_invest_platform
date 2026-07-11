@@ -486,117 +486,7 @@ def update_cash(body: CashUpdate):
 # ----------------- STOCK PRICE SYNC ROUTINES -----------------
 is_syncing = False
 
-def sync_yahoo_futures():
-    print("[Yahoo Futures Sync] Starting sync of futures and overseas stock assets...")
-    ticker_mapping = {
-        "XAU_USDT": "GC=F",
-        "CL_USDT": "CL=F",
-        "NAS100_USDT": "NQ=F",
-        "AAPL_USDT": "AAPL",
-        "TSLA_USDT": "TSLA"
-    }
-    
-    conn = get_db()
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute("SELECT stock_code, stock_name, market, sector FROM stocks WHERE market = 'FUTURES'")
-        stocks_rows = cursor.fetchall()
-        stock_meta = {r["stock_code"]: dict(r) for r in stocks_rows}
-        
-        import urllib.request
-        import json
-        import datetime
-        
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
-        
-        for code, yf_ticker in ticker_mapping.items():
-            if code not in stock_meta:
-                continue
-                
-            meta = stock_meta[code]
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yf_ticker}?range=180d&interval=1d"
-            req = urllib.request.Request(url, headers=headers)
-            try:
-                with urllib.request.urlopen(req, timeout=10) as response:
-                    res_data = json.loads(response.read().decode())
-                    results = res_data.get("chart", {}).get("result", [])
-                    if not results:
-                        continue
-                    chart_data = results[0]
-                    timestamps = chart_data.get("timestamp", [])
-                    quotes = chart_data.get("indicators", {}).get("quote", [{}])[0]
-                    
-                    opens = quotes.get("open", [])
-                    highs = quotes.get("high", [])
-                    lows = quotes.get("low", [])
-                    closes = quotes.get("close", [])
-                    volumes = quotes.get("volume", [])
-                    
-                    rows_to_insert = []
-                    for idx in range(len(timestamps)):
-                        t = timestamps[idx]
-                        o = opens[idx]
-                        h = highs[idx]
-                        l = lows[idx]
-                        c = closes[idx]
-                        v = volumes[idx] if idx < len(volumes) and volumes[idx] is not None else 0
-                        
-                        if o is None or h is None or l is None or c is None:
-                            continue
-                            
-                        dt = datetime.datetime.fromtimestamp(t, datetime.timezone(datetime.timedelta(hours=9)))
-                        trade_date = dt.strftime("%Y%m%d")
-                        
-                        if idx > 0 and closes[idx - 1] is not None:
-                            prev_close = closes[idx - 1]
-                            price_change = c - prev_close
-                            change_rate = (price_change / prev_close) * 100
-                        else:
-                            price_change = c - o
-                            change_rate = (price_change / o) * 100 if o > 0 else 0
-                            
-                        listed_shares = 1000000
-                        market_cap = c * listed_shares
-                        
-                        rows_to_insert.append((
-                            trade_date,
-                            code,
-                            meta["stock_name"],
-                            meta["market"],
-                            None,
-                            float(o),
-                            float(h),
-                            float(l),
-                            float(c),
-                            float(price_change),
-                            float(change_rate),
-                            int(v),
-                            float(c * v),
-                            float(market_cap),
-                            int(listed_shares)
-                        ))
-                        
-                    if rows_to_insert:
-                        cursor.executemany("""
-                            INSERT OR REPLACE INTO daily_prices (
-                                trade_date, stock_code, stock_name, market, section,
-                                open_price, high_price, low_price, close_price,
-                                price_change, change_rate, volume, trading_value,
-                                market_cap, listed_shares
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, rows_to_insert)
-                        conn.commit()
-                        print(f"[Yahoo Futures Sync] Synced and cached {len(rows_to_insert)} daily candles for {code} ({yf_ticker})")
-            except Exception as e:
-                print(f"[Yahoo Futures Sync] Error syncing {code} ({yf_ticker}): {e}")
-    except Exception as e:
-        print(f"[Yahoo Futures Sync] Query failed: {e}")
-    finally:
-        conn.close()
-    print("[Yahoo Futures Sync] Finished syncing futures and overseas stock assets.")
+from app.pipelines.sync_yahoo_futures_pipeline import sync_yahoo_futures
 
 def run_catchup_sync():
     global is_syncing
@@ -609,6 +499,18 @@ def run_catchup_sync():
             sync_yahoo_futures()
         except Exception as e:
             print(f"[Startup Sync] Yahoo futures sync failed: {e}")
+            
+        try:
+            from app.pipelines.sync_cftc_cot_pipeline import sync_cftc_cot
+            sync_cftc_cot()
+        except Exception as e:
+            print(f"[Startup Sync] CFTC COT sync failed: {e}")
+            
+        try:
+            from app.pipelines.sync_macro_pipeline import sync_macro_data
+            sync_macro_data()
+        except Exception as e:
+            print(f"[Startup Sync] Macro data sync failed: {e}")
             
         conn = get_db()
         cursor = conn.cursor()
@@ -657,10 +559,26 @@ def run_catchup_sync():
     finally:
         is_syncing = False
 
+async def schedule_daily_sync():
+    """
+    Background scheduler loop. Triggers catchup sync every 12 hours.
+    """
+    print("[Scheduler] Starting background scheduler loop...")
+    while True:
+        try:
+            # Sleep for 12 hours (43200 seconds)
+            await asyncio.sleep(43200)
+            print("[Scheduler] Triggering periodic background sync...")
+            await asyncio.to_thread(run_catchup_sync)
+        except Exception as e:
+            print(f"[Scheduler] Error in scheduler loop: {e}")
+            await asyncio.sleep(300)
+
 @app.on_event("startup")
 def on_startup():
     # Start catchup sync in a background thread so it doesn't block FastAPI server startup
     asyncio.create_task(asyncio.to_thread(run_catchup_sync))
+    asyncio.create_task(schedule_daily_sync())
 
 @app.post("/api/stocks/sync")
 def trigger_stock_sync(background_tasks: BackgroundTasks):
@@ -677,6 +595,18 @@ def trigger_stock_sync(background_tasks: BackgroundTasks):
                 sync_yahoo_futures()
             except Exception as e:
                 print(f"[Manual Sync] Yahoo futures sync failed: {e}")
+                
+            try:
+                from app.pipelines.sync_cftc_cot_pipeline import sync_cftc_cot
+                sync_cftc_cot()
+            except Exception as e:
+                print(f"[Manual Sync] CFTC COT sync failed: {e}")
+                
+            try:
+                from app.pipelines.sync_macro_pipeline import sync_macro_data
+                sync_macro_data()
+            except Exception as e:
+                print(f"[Manual Sync] Macro data sync failed: {e}")
             from datetime import datetime, timezone, timedelta, date
             kst_tz = timezone(timedelta(hours=9))
             now_kst = datetime.now(kst_tz)
@@ -989,3 +919,81 @@ def get_stock_detail(stock_code: str):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
+
+
+# ----------------- FUTURES & MACRO API ENDPOINTS -----------------
+
+@app.get("/api/futures/cot")
+def get_futures_cot(symbol: str = "XAU_USDT", limit: int = 52):
+    """
+    Returns weekly Commitment of Traders (COT) positioning data for a given contract.
+    """
+    from app.db.db import get_cftc_cot
+    try:
+        cot_data = get_cftc_cot(symbol, limit=limit)
+        return cot_data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/macro/calendar")
+def get_economic_calendar(days: int = 14):
+    """
+    Returns upcoming macroeconomic events from TradingView economic calendar.
+    """
+    from app.db.db import get_macro_calendar
+    from datetime import date, timedelta
+    today_str = date.today().strftime("%Y-%m-%d")
+    end_str = (date.today() + timedelta(days=days)).strftime("%Y-%m-%d")
+    try:
+        events = get_macro_calendar(today_str, end_str)
+        return events
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/macro/indicators")
+def get_macro_indicators_data(limit: int = 120):
+    """
+    Returns historical timeseries observations for major macroeconomic indicators.
+    """
+    from app.db.db import get_macro_indicators
+    series_ids = ["FEDFUNDS", "US10Y", "US2Y", "CPI", "UNRATE", "GDP"]
+    try:
+        data = get_macro_indicators(series_ids, limit=limit)
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/logs")
+def get_system_logs(strategy: Optional[str] = None, limit: int = 100):
+    """
+    Returns pipeline or strategy execution logs.
+    """
+    import sqlite3
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        if strategy:
+            cursor.execute("""
+                SELECT timestamp, message FROM logs 
+                WHERE strategy = ? 
+                ORDER BY id DESC LIMIT ?
+            """, (strategy, limit))
+        else:
+            cursor.execute("""
+                SELECT timestamp, message FROM logs 
+                ORDER BY id DESC LIMIT ?
+            """, (limit,))
+        rows = cursor.fetchall()
+        conn.close()
+        
+        logs_list = []
+        for row in reversed(rows):
+            ts, msg = row
+            if msg.startswith("["):
+                logs_list.append(msg)
+            else:
+                logs_list.append(f"[{ts}] {msg}")
+        return logs_list
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
