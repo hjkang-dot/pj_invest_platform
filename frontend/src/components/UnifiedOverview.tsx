@@ -10,6 +10,7 @@ interface OverviewProps {
   stockWeight: number; // e.g. 45
   coinWeight: number;  // e.g. 35
   cashWeight: number;  // e.g. 20
+  onClickTotalAsset?: () => void;
 }
 
 export const UnifiedOverview: React.FC<OverviewProps> = ({
@@ -21,6 +22,7 @@ export const UnifiedOverview: React.FC<OverviewProps> = ({
   stockWeight = 45,
   coinWeight = 35,
   cashWeight = 20,
+  onClickTotalAsset,
 }) => {
   // SVG Donut calculation
   const radius = 50;
@@ -47,7 +49,10 @@ export const UnifiedOverview: React.FC<OverviewProps> = ({
       {/* 1. Indicators Cards Column */}
       <div className="xl:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
         {/* Card 1: Total Asset */}
-        <div className="relative overflow-hidden bg-slate-900/40 backdrop-blur-xl border border-slate-800 rounded-2xl p-6 shadow-xl hover:border-slate-700 transition duration-300 group">
+        <div 
+          onClick={onClickTotalAsset}
+          className="relative overflow-hidden bg-slate-900/40 backdrop-blur-xl border border-slate-800 rounded-2xl p-6 shadow-xl hover:border-slate-700 hover:bg-slate-900/60 active:scale-[0.99] transition duration-300 group cursor-pointer"
+        >
           <div className="absolute top-0 right-0 w-24 h-24 bg-cyan-500/10 rounded-full blur-2xl group-hover:bg-cyan-500/20 transition duration-500"></div>
           <div className="flex items-center gap-4 mb-4">
             <div className="p-3 bg-cyan-500/10 text-cyan-400 rounded-xl">

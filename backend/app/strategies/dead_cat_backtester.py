@@ -10,9 +10,10 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 
 from app.strategies.dead_cat_short import DeadCatShortStrategy
 from app.db.db import DB_PATH
+from app.clients.aden_client import AdenClient
 
-def load_data(contract: str, interval: str) -> pd.DataFrame:
-    """Loads candlesticks from SQLite database into a pandas DataFrame."""
+def load_data(contract: str, interval: str, limit=1200) -> pd.DataFrame:
+    """Loads candlesticks from SQLite database into a pandas DataFrame. If empty, fetches via AdenClient."""
     conn = sqlite3.connect(DB_PATH)
     query = """
         SELECT t, o, h, l, c, v FROM candlesticks
@@ -21,16 +22,34 @@ def load_data(contract: str, interval: str) -> pd.DataFrame:
     """
     df = pd.read_sql_query(query, conn, params=(contract, interval))
     conn.close()
+    
+    if df.empty or len(df) < 100:
+        print(f"[Loader] Database cache low/empty for {contract} ({interval}). Fetching from exchange...")
+        try:
+            client = AdenClient()
+            # This helper will fetch from exchange, save to SQLite
+            client.get_candlesticks_cached(contract, interval, limit=limit)
+            
+            # Re-fetch from DB after saving
+            conn = sqlite3.connect(DB_PATH)
+            df = pd.read_sql_query(query, conn, params=(contract, interval))
+            conn.close()
+        except Exception as e:
+            print(f"[Loader Error] Failed to fetch historical data from exchange: {e}")
+            
     return df
 
 def run_backtest(contract: str, interval: str, initial_balance=10000.0,
-                 long_p=120, short_p=20, rsi_p=14, rsi_ob=60,
-                 stop_mult=2.0, take_mult=3.0):
+                 long_p=120, pump_lookback=20, pump_thresh=0.30,
+                 vol_climax=4.0, vol_die=0.10, breakdown_thresh=0.30,
+                 stop_loss_pct=0.08, take_profit_pct=0.45, risk_pct=0.02):
     
     print(f"=== Backtest Started ===")
     print(f"Contract: {contract} | Interval: {interval}")
-    print(f"Params: Long MA={long_p}, Short MA={short_p}, RSI OB={rsi_ob}")
-    print(f"TP/SL: ATR SL Mult={stop_mult}, ATR TP Mult={take_mult}")
+    print(f"Params: Long MA={long_p}, Lookback={pump_lookback}, Pump Thresh={pump_thresh * 100}%")
+    print(f"Params: Vol Climax={vol_climax}x, Vol Die Ratio={vol_die * 100}%, Breakdown={breakdown_thresh * 100}%")
+    print(f"TP/SL: Stop Loss={stop_loss_pct * 100}%, Take Profit={take_profit_pct * 100}%")
+    print(f"Risk Target: {risk_pct * 100}% of balance per trade")
     print(f"Initial Balance: ${initial_balance:,.2f}")
     
     df = load_data(contract, interval)
@@ -38,16 +57,30 @@ def run_backtest(contract: str, interval: str, initial_balance=10000.0,
         print(f"[Error] No data found for {contract} with interval {interval} in database.")
         return
     
+    # Load BTC data for market regime filter (limit = 1200)
+    btc_df = load_data("BTC_USDT", interval, limit=1200)
+    if not btc_df.empty:
+        btc_df = btc_df.rename(columns={'c': 'btc_c'})
+        btc_df['btc_ma_long'] = btc_df['btc_c'].rolling(window=120).mean()
+        df = pd.merge(df, btc_df[['t', 'btc_c', 'btc_ma_long']], on='t', how='left')
+        print("Successfully merged BTC Market Regime Filter data.")
+    else:
+        print("[Warning] BTC_USDT data not found. Regime filter will be bypassed.")
+        df['btc_c'] = 0.0
+        df['btc_ma_long'] = 1.0 # Bypassed
+        
     print(f"Loaded {len(df)} candles.")
     
     # Initialize strategy
     strategy = DeadCatShortStrategy(
         long_period=long_p,
-        short_period=short_p,
-        rsi_period=rsi_p,
-        rsi_overbought=rsi_ob,
-        stop_atr_mult=stop_mult,
-        take_atr_mult=take_mult
+        pump_lookback=pump_lookback,
+        pump_threshold=pump_thresh,
+        vol_climax_factor=vol_climax,
+        vol_die_ratio=vol_die,
+        breakdown_threshold=breakdown_thresh,
+        stop_loss_pct=stop_loss_pct,
+        take_profit_pct=take_profit_pct
     )
     
     # Calculate indicators
@@ -98,19 +131,36 @@ def run_backtest(contract: str, interval: str, initial_balance=10000.0,
         if not in_position:
             # Check for entry signal
             signal = strategy.check_signal(df_slice)
-            if signal == "SHORT":
+            
+            # Apply BTC Market Regime Filter: only allow SHORT entry when BTC is in downtrend (btc_c < btc_ma_long)
+            is_btc_downtrend = True
+            if 'btc_c' in current_row and 'btc_ma_long' in current_row:
+                if pd.notna(current_row['btc_c']) and pd.notna(current_row['btc_ma_long']):
+                    is_btc_downtrend = current_row['btc_c'] < current_row['btc_ma_long']
+
+            if signal == "SHORT" and is_btc_downtrend:
                 # Enter SHORT
                 entry_price = c
-                # Bet 100% of balance (simple backtest assumption)
-                position_size = balance / entry_price
-                
-                # Apply entry fee
-                fee = balance * fee_rate
-                balance -= fee
-                position_size = balance / entry_price
-                
                 stop_loss = strategy.get_stop_loss_price(df_slice, entry_price, "SHORT")
                 take_profit = strategy.get_take_profit_price(df_slice, entry_price, "SHORT")
+                
+                # ATR-based position sizing (Risk target based on risk_pct)
+                atr = current_row['atr'] if 'atr' in current_row and pd.notna(current_row['atr']) else entry_price * 0.02
+                risk_amount = balance * risk_pct
+                loss_per_coin = abs(stop_loss - entry_price)
+                
+                if loss_per_coin > 0:
+                    position_size = risk_amount / loss_per_coin
+                else:
+                    position_size = balance / entry_price
+                
+                # Limit maximum leverage to 3x of current balance to avoid extreme liquidation risk
+                max_pos_size = (balance * 3.0) / entry_price
+                position_size = min(position_size, max_pos_size)
+                
+                # Apply entry fee based on actual position size
+                fee = (position_size * entry_price) * fee_rate
+                balance -= fee
                 
                 in_position = True
                 entry_time = pd.to_datetime(t, unit='s')
@@ -229,14 +279,18 @@ def show_available_contracts():
         print(f" - Contract: {r[0]} | Interval: {r[1]} | Candles Count: {r[2]}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Backtest Dead Cat Short Strategy.")
+    parser = argparse.ArgumentParser(description="Backtest Pump & Dump Short Strategy.")
     parser.add_argument("--contract", type=str, default="BTC_USDT", help="Contract code (e.g. BTC_USDT)")
-    parser.add_argument("--interval", type=str, default="1d", help="Candle interval (e.g. 1d, 1h)")
-    parser.add_argument("--long-p", type=int, default=120, help="Long MA period")
-    parser.add_argument("--short-p", type=int, default=20, help="Short MA period")
-    parser.add_argument("--rsi-ob", type=int, default=60, help="RSI Overbought boundary")
-    parser.add_argument("--stop-mult", type=float, default=2.0, help="ATR Stop Loss multiplier")
-    parser.add_argument("--take-mult", type=float, default=3.0, help="ATR Take Profit multiplier")
+    parser.add_argument("--interval", type=str, default="1d", help="Candle interval (e.g. 1d, 1h, 15m)")
+    parser.add_argument("--long-p", type=int, default=120, help="Long MA period for BTC filter")
+    parser.add_argument("--lookback", type=int, default=20, help="Pump check lookback window size")
+    parser.add_argument("--pump-thresh", type=float, default=0.30, help="Pump threshold ratio (e.g. 0.3 for 30 percent)")
+    parser.add_argument("--vol-climax", type=float, default=4.0, help="Volume climax multiplier (e.g. 4.0 for 4x)")
+    parser.add_argument("--vol-die", type=float, default=0.10, help="Volume decay threshold (e.g. 0.1 for 10 percent of peak)")
+    parser.add_argument("--breakdown", type=float, default=0.30, help="Breakdown price drop threshold (e.g. 0.3 for 30 percent drop)")
+    parser.add_argument("--stop-loss", type=float, default=0.08, help="Stop loss margin percentage above entry")
+    parser.add_argument("--take-profit", type=float, default=0.45, help="Take profit target percentage below entry")
+    parser.add_argument("--risk-pct", type=float, default=0.02, help="Risk target percentage of balance per trade (default: 0.02)")
     parser.add_argument("--list-available", action="store_true", help="List available contracts in DB")
     
     args = parser.parse_args()
@@ -248,8 +302,12 @@ if __name__ == "__main__":
             contract=args.contract,
             interval=args.interval,
             long_p=args.long_p,
-            short_p=args.short_p,
-            rsi_ob=args.rsi_ob,
-            stop_mult=args.stop_mult,
-            take_mult=args.take_mult
+            pump_lookback=args.lookback,
+            pump_thresh=args.pump_thresh,
+            vol_climax=args.vol_climax,
+            vol_die=args.vol_die,
+            breakdown_thresh=args.breakdown,
+            stop_loss_pct=args.stop_loss,
+            take_profit_pct=args.take_profit,
+            risk_pct=args.risk_pct
         )

@@ -1,11 +1,17 @@
 import os
 import sqlite3
 import asyncio
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
+
+from app.pipelines.krx_daily_price_pipeline import sync_krx_daily_prices_range
+from app.pipelines.sync_yahoo_futures_pipeline import sync_yahoo_futures
+from app.pipelines.sync_macro_pipeline import sync_macro_data
+from app.pipelines.sync_cftc_cot_pipeline import sync_cftc_cot
+from app.db.db import get_latest_trade_date
 
 app = FastAPI(title="Astron Trading Engine API")
 
@@ -111,12 +117,89 @@ class TransactionCreate(BaseModel):
     qty: float
     fee: float
     memo: str
+    currency: Optional[str] = "KRW"
 
 class CashUpdate(BaseModel):
     cash: float
 
-# Initialize Database on Startup
-init_default_data()
+class AccountCashUpdate(BaseModel):
+    accountType: str  # 'STOCK' | 'FUTURES'
+    amount: float
+
+async def run_catchup_sync_and_scheduler():
+    print("[Scheduler] Initiating startup catch-up sync task...")
+    try:
+        # 1. Fetch the latest synced trade date from SQLite
+        last_date_str = get_latest_trade_date()
+        today_obj = date.today()
+        
+        if last_date_str:
+            try:
+                last_date = datetime.strptime(last_date_str, "%Y-%m-%d").date()
+            except ValueError:
+                last_date = today_obj - timedelta(days=5)
+        else:
+            # Default catch-up fallback to last 5 days
+            last_date = today_obj - timedelta(days=5)
+            
+        if last_date < today_obj:
+            start_str = (last_date + timedelta(days=1)).strftime("%Y%m%d")
+            end_str = today_obj.strftime("%Y%m%d")
+            days_diff = (today_obj - last_date).days
+            
+            print(f"[Scheduler] Detected gap between {last_date_str} and {today_obj.strftime('%Y-%m-%d')}. Fetching {days_diff} days of missing data.")
+            
+            # Sync missing KRX daily prices
+            try:
+                sync_krx_daily_prices_range(start_str, end_str)
+            except Exception as e:
+                print(f"[Scheduler Error] KRX catch-up sync failed: {e}")
+                
+            # Sync missing Yahoo futures
+            try:
+                sync_yahoo_futures(days=max(days_diff + 2, 5))
+            except Exception as e:
+                print(f"[Scheduler Error] Yahoo futures catch-up sync failed: {e}")
+                
+            # Sync Macro indicators & CFTC COT
+            try:
+                sync_macro_data(limit=60, days_forward=14)
+            except Exception as e:
+                print(f"[Scheduler Error] Macro data catch-up sync failed: {e}")
+                
+            try:
+                sync_cftc_cot()
+            except Exception as e:
+                print(f"[Scheduler Error] CFTC COT catch-up sync failed: {e}")
+                
+        else:
+            print("[Scheduler] Database is already up to date. No catch-up sync needed.")
+    except Exception as e:
+        print(f"[Scheduler Error] Failed during startup catch-up sync: {e}")
+        
+    # 2. Start periodic check loop every 1 hour (3600 seconds)
+    print("[Scheduler] Periodic check scheduler loop successfully started.")
+    while True:
+        await asyncio.sleep(3600)
+        now = datetime.now()
+        # Run daily sync check at 18:00 (6 PM) to grab KOSPI/KOSDAQ and futures of today
+        if now.hour == 18:
+            print("[Scheduler] Running daily scheduled data synchronization...")
+            today_str = now.strftime("%Y%m%d")
+            try:
+                sync_krx_daily_prices_range(today_str, today_str)
+                sync_yahoo_futures(days=3)
+                sync_macro_data(limit=30, days_forward=14)
+                sync_cftc_cot()
+            except Exception as e:
+                print(f"[Scheduler Error] Failed during daily scheduled sync: {e}")
+
+@app.on_event("startup")
+async def startup_event():
+    # Auto populate initial default data
+    init_default_data()
+    # Spawn catch-up sync and scheduler task asynchronously in background loop
+    asyncio.create_task(run_catchup_sync_and_scheduler())
 
 # ----------------- API ROUTES -----------------
 
@@ -133,7 +216,12 @@ def get_dashboard():
         cum_return = status_row["total_return"] if status_row else 24.8
         mdd_val = status_row["mdd"] if status_row else -4.2
 
-        # 2. Fetch active holdings
+        usd_rate = 1350.0
+        holdings_list = []
+        stock_val_krw = 0
+        coin_val_krw = 0
+
+        # 2. Fetch active holdings from Local DB
         cursor.execute("""
             SELECT id, stock_code, stock_name, entry_price, quantity, current_price, valuation, holding_return, score_at_entry, strategy_type 
             FROM ud_portfolio_holdings 
@@ -141,11 +229,9 @@ def get_dashboard():
         """)
         holding_rows = cursor.fetchall()
         
-        holdings_list = []
-        stock_val_krw = 0
-        coin_val_krw = 0
-        usd_rate = 1350.0
-
+        db_coin_val_krw = 0
+        db_coin_pnl_krw = 0
+        stock_pnl_krw = 0
         for row in holding_rows:
             symbol = row["stock_code"]
             is_usd = row["strategy_type"] == "vol_climax" or "_" in symbol or symbol == "GOLD_FUT"
@@ -153,31 +239,116 @@ def get_dashboard():
             
             val_native = row["quantity"] * row["current_price"]
             val_krw = val_native * rate
+            pnl_krw = (row["quantity"] * (row["current_price"] - row["entry_price"])) * rate
 
             if is_usd:
-                coin_val_krw += val_krw
+                db_coin_val_krw += val_krw
+                db_coin_pnl_krw += pnl_krw
             else:
                 stock_val_krw += val_krw
+                stock_pnl_krw += pnl_krw
+                holdings_list.append({
+                    "id": str(row["id"]),
+                    "code": symbol,
+                    "name": row["stock_name"],
+                    "type": "STOCK",
+                    "quantity": row["quantity"],
+                    "entryPrice": row["entry_price"],
+                    "currentPrice": row["current_price"],
+                    "valuation": val_native,  # Frontend format
+                    "pnl": val_native - (row["quantity"] * row["entry_price"]),
+                    "pnlPct": float(row["holding_return"]),
+                    "score": int(row["score_at_entry"]) if row["score_at_entry"] else None,
+                    "posType": None
+                })
 
-            holdings_list.append({
-                "id": str(row["id"]),
-                "code": symbol,
-                "name": row["stock_name"],
-                "type": "COIN" if is_usd else "STOCK",
-                "quantity": row["quantity"],
-                "entryPrice": row["entry_price"],
-                "currentPrice": row["current_price"],
-                "valuation": val_native,  # Frontend format
-                "pnl": val_native - (row["quantity"] * row["entry_price"]),
-                "pnlPct": float(row["holding_return"]),
-                "score": int(row["score_at_entry"]) if row["score_at_entry"] else None,
-                "posType": "LONG" if is_usd else None
-            })
+        # 3. Fetch COIN holdings & balance from Aden Exchange API
+        aden_success = False
+        coin_pnl_krw = 0
+        try:
+            from app.clients.aden_client import AdenClient
+            client = AdenClient()
+            
+            # Fetch Aden account total
+            aden_acc = client.get_account()
+            aden_total_usd = float(aden_acc.get("total", 0))
+            coin_val_krw = aden_total_usd * usd_rate
+            
+            coin_upnl_usd = float(aden_acc.get("unrealised_pnl", 0))
+            coin_pnl_krw = coin_upnl_usd * usd_rate
+            
+            # Fetch Aden positions
+            aden_pos = client.get_positions()
+            for idx, pos in enumerate(aden_pos):
+                size = float(pos.get("size", 0))
+                if size == 0:
+                    continue
+                entry_p = float(pos.get("entry_price", 0))
+                mark_p = float(pos.get("mark_price", 0))
+                val_usd = float(pos.get("value", 0))
+                upnl = float(pos.get("unrealised_pnl", 0))
+                
+                pos_type = "SHORT" if size < 0 else "LONG"
+                
+                # Calculate pnl percentage based on direction
+                if pos_type == "SHORT":
+                    pnl_pct = ((entry_p - mark_p) / entry_p) * 100 if entry_p > 0 else 0.0
+                else:
+                    pnl_pct = ((mark_p - entry_p) / entry_p) * 100 if entry_p > 0 else 0.0
+
+                holdings_list.append({
+                    "id": f"aden_pos_{idx}",
+                    "code": pos.get("contract"),
+                    "name": pos.get("contract").split("_")[0] if "_" in pos.get("contract") else pos.get("contract"),
+                    "type": "COIN",
+                    "quantity": abs(size),
+                    "entryPrice": entry_p,
+                    "currentPrice": mark_p,
+                    "valuation": val_usd, # natively in USD
+                    "pnl": upnl, # natively in USD
+                    "pnlPct": round(pnl_pct, 2),
+                    "score": None,
+                    "posType": pos_type
+                })
+            
+            aden_success = True
+        except Exception as e:
+            print(f"[Dashboard Warning] Failed to sync with Aden Exchange: {e}")
+            
+        # Fallback if Aden API failed
+        if not aden_success:
+            coin_val_krw = db_coin_val_krw
+            coin_pnl_krw = db_coin_pnl_krw
+            # Append local DB coin holdings
+            for row in holding_rows:
+                symbol = row["stock_code"]
+                is_usd = row["strategy_type"] == "vol_climax" or "_" in symbol or symbol == "GOLD_FUT"
+                if is_usd:
+                    val_native = row["quantity"] * row["current_price"]
+                    holdings_list.append({
+                        "id": str(row["id"]),
+                        "code": symbol,
+                        "name": row["stock_name"],
+                        "type": "COIN",
+                        "quantity": row["quantity"],
+                        "entryPrice": row["entry_price"],
+                        "currentPrice": row["current_price"],
+                        "valuation": val_native,
+                        "pnl": val_native - (row["quantity"] * row["entry_price"]),
+                        "pnlPct": float(row["holding_return"]),
+                        "score": int(row["score_at_entry"]) if row["score_at_entry"] else None,
+                        "posType": "LONG"
+                    })
 
         total_asset = cash_balance + stock_val_krw + coin_val_krw
         stock_weight = round((stock_val_krw / total_asset) * 100) if total_asset > 0 else 0
         coin_weight = round((coin_val_krw / total_asset) * 100) if total_asset > 0 else 0
         cash_weight = 100 - stock_weight - coin_weight
+
+        # Calculate real-time profit metrics
+        total_pnl = stock_pnl_krw + coin_pnl_krw
+        total_purchase = total_asset - total_pnl
+        total_pnl_pct = round((total_pnl / total_purchase) * 100, 2) if total_purchase > 0 else 0.0
 
         # 3. Fetch recent trades
         cursor.execute("""
@@ -219,8 +390,8 @@ def get_dashboard():
         return {
           "totalAsset": total_asset,
           "cashBalance": cash_balance,
-          "dailyReturn": 2430000,
-          "dailyReturnPct": 1.6,
+          "dailyReturn": total_pnl,
+          "dailyReturnPct": total_pnl_pct,
           "cumulativeReturnPct": cum_return,
           "mdd": mdd_val,
           "stockWeight": stock_weight,
@@ -234,6 +405,42 @@ def get_dashboard():
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
+
+@app.get("/api/stocks/search")
+def search_stocks(q: str = "", market: str = ""):
+    if not q:
+        return []
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        # Search by code or name with market filter if provided
+        query_pattern = f"%{q}%"
+        if market:
+            cursor.execute("""
+                SELECT stock_code, stock_name, market FROM stocks
+                WHERE (stock_code LIKE ? OR stock_name LIKE ?) AND is_active = 1 AND market = ?
+                LIMIT 10
+            """, (query_pattern, query_pattern, market.upper()))
+        else:
+            cursor.execute("""
+                SELECT stock_code, stock_name, market FROM stocks
+                WHERE (stock_code LIKE ? OR stock_name LIKE ?) AND is_active = 1
+                LIMIT 10
+            """, (query_pattern, query_pattern))
+        rows = cursor.fetchall()
+        results = []
+        for r in rows:
+            results.append({
+                "code": r["stock_code"],
+                "name": r["stock_name"],
+                "market": r["market"]
+            })
+        return results
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
 
 @app.get("/api/transactions")
 def get_transactions():
@@ -249,10 +456,12 @@ def get_transactions():
         rows = cursor.fetchall()
         txs = []
         for r in rows:
+            is_usd = "_" in r["symbol"] or r["symbol"] == "GOLD_FUT" or r["symbol"].endswith("USDT")
+            currency = "USD" if is_usd else "KRW"
             txs.append({
                 "id": str(r["id"]),
                 "date": r["date"],
-                "assetClass": "COIN" if "_" in r["symbol"] or r["symbol"] == "GOLD_FUT" else "STOCK",
+                "assetClass": "COIN" if "_" in r["symbol"] and "FUT" not in r["symbol"] else "STOCK",
                 "strategyId": r["strategyId"],
                 "type": r["type"],
                 "symbol": r["symbol"],
@@ -260,7 +469,8 @@ def get_transactions():
                 "price": r["price"],
                 "qty": r["qty"],
                 "fee": 0,
-                "memo": ""
+                "memo": "",
+                "currency": currency
             })
         return txs
     except Exception as e:
@@ -273,22 +483,61 @@ def add_transaction(tx: TransactionCreate):
     conn = get_db()
     cursor = conn.cursor()
     try:
-        # 1. Fetch current cash balance
-        cursor.execute("SELECT current_cash FROM ud_portfolio_status LIMIT 1")
-        status_row = cursor.fetchone()
-        cash = status_row["current_cash"] if status_row else 33337250.0
-
-        is_usd = tx.assetClass in ["COIN", "FUTURES"] or "_" in tx.symbol or tx.symbol == "GOLD_FUT"
-        rate = 1350.0 if is_usd else 1.0
-        amount_krw = (tx.qty * tx.price + tx.fee) * rate
-
-        # Validate cash balance for buying
-        if tx.type == "BUY":
-            if cash < amount_krw:
-                raise HTTPException(status_code=400, detail="예수금이 부족합니다.")
-            new_cash = cash - amount_krw
+        # Check asset class for targeting cash
+        is_futures = tx.assetClass == "FUTURES" or tx.symbol.endswith("FUT") or ("_" in tx.symbol and tx.assetClass != "COIN")
+        
+        usd_rate = 1350.0
+        tx_currency = tx.currency.upper() if tx.currency else "KRW"
+        
+        if is_futures:
+            # 1. Fetch futures cash balance (USD) from bot_state
+            cursor.execute("SELECT value FROM bot_state WHERE strategy = ? AND key = ? LIMIT 1", ('COMMON', 'futures_cash'))
+            futures_cash_row = cursor.fetchone()
+            cash = float(futures_cash_row[0]) if futures_cash_row else 10000.0
+            
+            # Calculate transaction amount in USD based on selected currency
+            if tx_currency == "KRW":
+                amount = (tx.qty * tx.price + tx.fee) / usd_rate
+            else:
+                amount = tx.qty * tx.price + tx.fee
+            
+            # Validate cash balance for buying
+            if tx.type == "BUY":
+                if cash < amount:
+                    raise HTTPException(status_code=400, detail="예수금이 부족합니다. (선물 달러예수금 부족)")
+                new_cash = cash - amount
+            else:
+                new_cash = cash + amount
+                
+            # Update futures cash balance
+            cursor.execute("""
+                INSERT OR REPLACE INTO bot_state (strategy, key, value)
+                VALUES (?, ?, ?)
+            """, ('COMMON', 'futures_cash', str(new_cash)))
+            
         else:
-            new_cash = cash + amount_krw
+            # STOCK / COIN (KRW based check on local status table)
+            # 1. Fetch current cash balance
+            cursor.execute("SELECT current_cash FROM ud_portfolio_status LIMIT 1")
+            status_row = cursor.fetchone()
+            cash = status_row["current_cash"] if status_row else 33337250.0
+
+            # Calculate transaction amount in KRW based on selected currency
+            if tx_currency == "USD":
+                amount_krw = (tx.qty * tx.price + tx.fee) * usd_rate
+            else:
+                amount_krw = tx.qty * tx.price + tx.fee
+
+            # Validate cash balance for buying
+            if tx.type == "BUY":
+                if cash < amount_krw:
+                    raise HTTPException(status_code=400, detail="예수금이 부족합니다. (주식 원화예수금 부족)")
+                new_cash = cash - amount_krw
+            else:
+                new_cash = cash + amount_krw
+
+            # Update cash balance
+            cursor.execute("UPDATE ud_portfolio_status SET current_cash = ?", (new_cash,))
 
         # 2. Insert into transactions
         cursor.execute("""
@@ -296,10 +545,7 @@ def add_transaction(tx: TransactionCreate):
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (tx.date, tx.symbol, tx.name, tx.type, tx.price, tx.qty, tx.qty * tx.price, 0.0, tx.strategyId))
 
-        # 3. Update cash balance
-        cursor.execute("UPDATE ud_portfolio_status SET current_cash = ?", (new_cash,))
-
-        # 4. Update holdings
+        # 3. Update holdings
         cursor.execute("""
             SELECT id, quantity, entry_price FROM ud_portfolio_holdings 
             WHERE stock_code = ? AND status = 'ACTIVE' LIMIT 1
@@ -997,3 +1243,215 @@ def get_system_logs(strategy: Optional[str] = None, limit: int = 100):
         return logs_list
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
+@app.get("/api/accounts")
+def get_accounts():
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        # 1. Fetch STOCK cash, total_return & mdd from ud_portfolio_status
+        cursor.execute("SELECT current_cash, total_return, mdd FROM ud_portfolio_status LIMIT 1")
+        status_row = cursor.fetchone()
+        cash_balance = status_row["current_cash"] if status_row else 33337250.0
+        cum_return = status_row["total_return"] if status_row else 24.8
+        mdd_val = status_row["mdd"] if status_row else -4.2
+
+        # 2. Fetch FUTURES cash from bot_state
+        cursor.execute("SELECT value FROM bot_state WHERE strategy = ? AND key = ? LIMIT 1", ('COMMON', 'futures_cash'))
+        futures_cash_row = cursor.fetchone()
+        futures_cash_usd = float(futures_cash_row[0]) if futures_cash_row else 10000.0
+
+        # 3. Fetch active holdings from Local DB with market info
+        cursor.execute("""
+            SELECT h.stock_code, h.stock_name, h.entry_price, h.quantity, h.current_price, h.holding_return, s.market 
+            FROM ud_portfolio_holdings h
+            LEFT JOIN stocks s ON h.stock_code = s.stock_code
+            WHERE h.status = 'ACTIVE'
+        """)
+        holding_rows = cursor.fetchall()
+        
+        stocks_list = []
+        stock_val_krw = 0
+        stock_pnl_krw = 0
+        
+        futures_list = []
+        futures_val_usd = 0
+        futures_pnl_usd = 0
+        
+        usd_rate = 1350.0
+
+        for row in holding_rows:
+            symbol = row["stock_code"]
+            market = row["market"] or ""
+            
+            # Classify by s.market
+            if market == "FUTURES" or symbol.endswith("FUT") or ("_" in symbol and market != "COIN"):
+                # Global Futures Asset (calculated in USD natively)
+                val_native = row["quantity"] * row["current_price"]
+                futures_val_usd += val_native
+                pnl_usd = row["quantity"] * (row["current_price"] - row["entry_price"])
+                futures_pnl_usd += pnl_usd
+                
+                futures_list.append({
+                    "code": symbol,
+                    "name": row["stock_name"],
+                    "quantity": row["quantity"],
+                    "entryPrice": row["entry_price"],
+                    "currentPrice": row["current_price"],
+                    "valuation": val_native,
+                    "pnlPct": float(row["holding_return"])
+                })
+            elif market == "COIN" or symbol.endswith("_USDT"):
+                # Skip COIN assets from local holdings because we read coin positions from Aden Exchange API
+                continue
+            else:
+                # KRX Stock Asset
+                val = row["quantity"] * row["current_price"]
+                stock_val_krw += val
+                stock_pnl_krw += row["quantity"] * (row["current_price"] - row["entry_price"])
+                stocks_list.append({
+                    "code": symbol,
+                    "name": row["stock_name"],
+                    "quantity": row["quantity"],
+                    "entryPrice": row["entry_price"],
+                    "currentPrice": row["current_price"],
+                    "valuation": val,
+                    "pnlPct": float(row["holding_return"])
+                })
+
+        # 4. Fetch Aden Exchange Account (Coin)
+        coin_total_usd = 0.0
+        coin_available_usd = 0.0
+        coin_upnl_usd = 0.0
+        positions_list = []
+        
+        try:
+            from app.clients.aden_client import AdenClient
+            client = AdenClient()
+            aden_acc = client.get_account()
+            coin_total_usd = float(aden_acc.get("total", 0))
+            coin_available_usd = float(aden_acc.get("available", 0))
+            coin_upnl_usd = float(aden_acc.get("unrealised_pnl", 0))
+            
+            aden_pos = client.get_positions()
+            for pos in aden_pos:
+                size = float(pos.get("size", 0))
+                if size == 0:
+                    continue
+                entry_p = float(pos.get("entry_price", 0))
+                mark_p = float(pos.get("mark_price", 0))
+                
+                pos_type = "SHORT" if size < 0 else "LONG"
+                if pos_type == "SHORT":
+                    pnl_pct = ((entry_p - mark_p) / entry_p) * 100 if entry_p > 0 else 0.0
+                else:
+                    pnl_pct = ((mark_p - entry_p) / entry_p) * 100 if entry_p > 0 else 0.0
+                
+                positions_list.append({
+                    "contract": pos.get("contract"),
+                    "size": abs(size),
+                    "posType": pos_type,
+                    "entryPrice": entry_p,
+                    "markPrice": mark_p,
+                    "value": float(pos.get("value", 0)),
+                    "unrealisedPnl": float(pos.get("unrealised_pnl", 0)),
+                    "pnlPct": round(pnl_pct, 2)
+                })
+        except Exception as e:
+            print(f"[Accounts Warning] Failed to fetch Aden account details: {e}")
+
+        # Real-time portfolio totals
+        coin_total_krw = coin_total_usd * usd_rate
+        coin_pnl_krw = coin_upnl_usd * usd_rate
+        
+        futures_total_usd = futures_cash_usd + futures_val_usd
+        futures_total_krw = futures_total_usd * usd_rate
+        futures_pnl_krw = futures_pnl_usd * usd_rate
+        
+        stock_total_krw = cash_balance + stock_val_krw
+        
+        total_portfolio_asset = stock_total_krw + coin_total_krw + futures_total_krw
+        
+        # Calculate Account Weights
+        stock_w = round((stock_total_krw / total_portfolio_asset) * 100) if total_portfolio_asset > 0 else 0
+        coin_w = round((coin_total_krw / total_portfolio_asset) * 100) if total_portfolio_asset > 0 else 0
+        futures_w = round((futures_total_krw / total_portfolio_asset) * 100) if total_portfolio_asset > 0 else 0
+        
+        # Normalize weights (sum to 100%)
+        if total_portfolio_asset > 0:
+            futures_w = 100 - stock_w - coin_w
+
+        total_pnl = stock_pnl_krw + coin_pnl_krw + futures_pnl_krw
+        total_purchase = total_portfolio_asset - total_pnl
+        total_pnl_pct = round((total_pnl / total_purchase) * 100, 2) if total_purchase > 0 else 0.0
+
+        return {
+            "metrics": {
+                "cumulativeReturnPct": cum_return,
+                "mdd": mdd_val,
+                "dailyReturn": total_pnl,
+                "dailyReturnPct": total_pnl_pct,
+                "stockWeight": stock_w,
+                "coinWeight": coin_w,
+                "cashWeight": futures_w, # map cashWeight to futures_w for legacy chart compat
+                "futuresWeight": futures_w,
+                "totalAsset": total_portfolio_asset
+            },
+            "stockAccount": {
+                "cash": cash_balance,
+                "valuation": stock_val_krw,
+                "total": stock_total_krw,
+                "holdings": stocks_list
+            },
+            "coinAccount": {
+                "usdRate": usd_rate,
+                "cashUsd": coin_available_usd,
+                "valuationUsd": coin_total_usd - coin_available_usd,
+                "totalUsd": coin_total_usd,
+                "totalKrw": coin_total_krw,
+                "unrealisedPnlUsd": coin_upnl_usd,
+                "positions": positions_list
+            },
+            "futuresAccount": {
+                "cashUsd": futures_cash_usd,
+                "valuationUsd": futures_val_usd,
+                "totalUsd": futures_total_usd,
+                "totalKrw": futures_total_krw,
+                "unrealisedPnlUsd": futures_pnl_usd,
+                "holdings": futures_list
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
+@app.put("/api/accounts/cash")
+def update_account_cash(payload: AccountCashUpdate):
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        if payload.accountType == "STOCK":
+            # Update local portfolio cash balance in status table
+            cursor.execute("UPDATE ud_portfolio_status SET current_cash = ?", (payload.amount,))
+            conn.commit()
+            print(f"[System] Updated Stock cash to {payload.amount}")
+        elif payload.accountType == "FUTURES":
+            # Update futures cash in bot_state table
+            cursor.execute("""
+                INSERT OR REPLACE INTO bot_state (strategy, key, value)
+                VALUES (?, ?, ?)
+            """, ('COMMON', 'futures_cash', str(payload.amount)))
+            conn.commit()
+            print(f"[System] Updated Futures cash to {payload.amount}")
+        else:
+            raise HTTPException(status_code=400, detail="Invalid account type")
+        return {"status": "success", "amount": payload.amount}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()

@@ -12,11 +12,12 @@ import { AssetMonitor } from "./components/AssetMonitor";
 import { StockExplorer } from "./components/StockExplorer";
 import { StockDetail } from "./components/StockDetail";
 import { MacroDashboard } from "./components/MacroDashboard";
-import { RefreshCw, ShieldCheck, LayoutDashboard, Compass, PlusCircle, Search, Globe } from "lucide-react";
+import { AccountDetails } from "./components/AccountDetails";
+import { RefreshCw, ShieldCheck, LayoutDashboard, Compass, PlusCircle, Search, Globe, Wallet } from "lucide-react";
 
 function App() {
   const [refreshing, setRefreshing] = useState(false);
-  const [currentView, setCurrentView] = useState<"DASHBOARD" | "STRATEGY_LIST" | "STRATEGY_DETAIL" | "TRANSACTION_ENTRY" | "STOCK_EXPLORER" | "STOCK_DETAIL" | "MACRO_DASHBOARD">("DASHBOARD");
+  const [currentView, setCurrentView] = useState<"DASHBOARD" | "STRATEGY_LIST" | "STRATEGY_DETAIL" | "TRANSACTION_ENTRY" | "STOCK_EXPLORER" | "STOCK_DETAIL" | "MACRO_DASHBOARD" | "ACCOUNT_DETAILS">("DASHBOARD");
   const [selectedStrategyId, setSelectedStrategyId] = useState<string | null>(null);
   const [selectedStockCode, setSelectedStockCode] = useState<string | null>(null);
 
@@ -124,119 +125,152 @@ function App() {
   const recentTradesFormatted = dashboardData ? dashboardData.recentTrades : [];
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 p-4 sm:p-6 lg:p-8 font-sans antialiased selection:bg-cyan-500 selection:text-slate-900 relative overflow-hidden">
+    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans antialiased selection:bg-cyan-500 selection:text-slate-900 flex flex-col md:flex-row relative overflow-hidden">
       {/* Background Neon Glows */}
       <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-cyan-500/5 rounded-full blur-[120px] pointer-events-none"></div>
       <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-emerald-500/5 rounded-full blur-[120px] pointer-events-none"></div>
 
-      <div className="max-w-7xl mx-auto space-y-6 relative z-10">
-        
-        {/* Header Section */}
-        <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-slate-900/30 backdrop-blur-xl border border-slate-900 p-6 rounded-2xl">
+      {/* 1. Left Sidebar Navigation */}
+      <aside className="w-full md:w-64 lg:w-72 bg-slate-900/20 backdrop-blur-xl border-b md:border-b-0 md:border-r border-slate-900/60 p-6 flex flex-col justify-between shrink-0 z-20 md:min-h-screen">
+        <div className="space-y-8">
+          {/* Logo Section */}
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-500 to-emerald-500 flex items-center justify-center shadow-lg shadow-cyan-500/20">
               <ShieldCheck size={24} className="text-slate-950 font-bold" />
             </div>
             <div>
-              <h1 className="text-xl font-black bg-gradient-to-r from-cyan-400 via-teal-400 to-emerald-400 bg-clip-text text-transparent tracking-wide">
-                ASTRON TRADING ENGINE
+              <h1 className="text-sm font-black bg-gradient-to-r from-cyan-400 via-teal-400 to-emerald-400 bg-clip-text text-transparent tracking-wider">
+                ASTRON ENGINE
               </h1>
-              <p className="text-[10px] text-slate-500 font-medium">통합 투자 파이프라인 & 다중 자산 대시보드</p>
+              <p className="text-[10px] text-slate-500 font-medium">통합 투자 대시보드</p>
             </div>
           </div>
 
-          {/* Navigation Tabs */}
-          <div className="flex bg-slate-950/60 p-1 rounded-xl border border-slate-900 self-stretch md:self-auto justify-center">
+          {/* Navigation Menus */}
+          <nav className="flex flex-col gap-1.5">
+            {/* Dashboard */}
             <button
               onClick={() => {
                 setCurrentView("DASHBOARD");
                 setSelectedStrategyId(null);
               }}
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
                 currentView === "DASHBOARD"
-                  ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/10 shadow-sm shadow-cyan-500/5"
-                  : "text-slate-400 hover:text-slate-200 border border-transparent"
+                  ? "bg-cyan-500/15 text-cyan-400 border-cyan-500/20 shadow-sm shadow-cyan-500/5"
+                  : "text-slate-400 hover:text-slate-200 border-transparent hover:bg-slate-900/20"
               }`}
             >
-              <LayoutDashboard size={14} />
+              <LayoutDashboard size={16} />
               대시보드
             </button>
+
+            {/* Account Details */}
+            <button
+              onClick={() => {
+                setCurrentView("ACCOUNT_DETAILS");
+                setSelectedStrategyId(null);
+              }}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
+                currentView === "ACCOUNT_DETAILS"
+                  ? "bg-cyan-500/15 text-cyan-400 border-cyan-500/20 shadow-sm shadow-cyan-500/5"
+                  : "text-slate-400 hover:text-slate-200 border-transparent hover:bg-slate-900/20"
+              }`}
+            >
+              <Wallet size={16} />
+              계좌별 자산 명세
+            </button>
+
+            {/* Strategy list & detail */}
             <button
               onClick={() => {
                 setCurrentView("STRATEGY_LIST");
                 setSelectedStrategyId(null);
               }}
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
                 currentView === "STRATEGY_LIST" || currentView === "STRATEGY_DETAIL"
-                  ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/10 shadow-sm shadow-cyan-500/5"
-                  : "text-slate-400 hover:text-slate-200 border border-transparent"
+                  ? "bg-cyan-500/15 text-cyan-400 border-cyan-500/20 shadow-sm shadow-cyan-500/5"
+                  : "text-slate-400 hover:text-slate-200 border-transparent hover:bg-slate-900/20"
               }`}
             >
-              <Compass size={14} />
+              <Compass size={16} />
               전략 분석
             </button>
+
+            {/* Transaction entry */}
             <button
               onClick={() => {
                 setCurrentView("TRANSACTION_ENTRY");
                 setSelectedStrategyId(null);
               }}
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
                 currentView === "TRANSACTION_ENTRY"
-                  ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/10 shadow-sm shadow-cyan-500/5"
-                  : "text-slate-400 hover:text-slate-200 border border-transparent"
+                  ? "bg-cyan-500/15 text-cyan-400 border-cyan-500/20 shadow-sm shadow-cyan-500/5"
+                  : "text-slate-400 hover:text-slate-200 border-transparent hover:bg-slate-900/20"
               }`}
             >
-              <PlusCircle size={14} />
+              <PlusCircle size={16} />
               자산/거래 입력
             </button>
+
+            {/* Stock explorer */}
             <button
               onClick={() => {
                 setCurrentView("STOCK_EXPLORER");
                 setSelectedStrategyId(null);
                 setSelectedStockCode(null);
               }}
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
                 currentView === "STOCK_EXPLORER" || currentView === "STOCK_DETAIL"
-                  ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/10 shadow-sm shadow-cyan-500/5"
-                  : "text-slate-400 hover:text-slate-200 border border-transparent"
+                  ? "bg-cyan-500/15 text-cyan-400 border-cyan-500/20 shadow-sm shadow-cyan-500/5"
+                  : "text-slate-400 hover:text-slate-200 border-transparent hover:bg-slate-900/20"
               }`}
             >
-              <Search size={14} />
+              <Search size={16} />
               종목 탐색
             </button>
+
+            {/* Macro dashboard */}
             <button
               onClick={() => {
                 setCurrentView("MACRO_DASHBOARD");
                 setSelectedStrategyId(null);
                 setSelectedStockCode(null);
               }}
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
                 currentView === "MACRO_DASHBOARD"
-                  ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/10 shadow-sm shadow-cyan-500/5"
-                  : "text-slate-400 hover:text-slate-200 border border-transparent"
+                  ? "bg-cyan-500/15 text-cyan-400 border-cyan-500/20 shadow-sm shadow-cyan-500/5"
+                  : "text-slate-400 hover:text-slate-200 border-transparent hover:bg-slate-900/20"
               }`}
             >
-              <Globe size={14} />
+              <Globe size={16} />
               거시경제 분석
             </button>
+          </nav>
+        </div>
+
+        {/* Sidebar Footer Info */}
+        <div className="mt-auto pt-6 border-t border-slate-900/80 space-y-4">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-slate-500 font-mono">서버 상태</span>
+            <span className="flex items-center gap-1.5 text-[10px] text-emerald-400 font-bold font-mono">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              ONLINE
+            </span>
           </div>
           
-          <div className="flex items-center gap-3 self-stretch md:self-auto justify-between md:justify-start">
-            <span className="text-xs text-slate-400 font-mono bg-slate-950/60 px-3 py-1.5 rounded-lg border border-slate-800/80">
-              서버 상태: <span className="text-emerald-400 font-bold">ONLINE</span>
-            </span>
-            <button
-              onClick={handleRefresh}
-              className="flex items-center gap-1.5 px-4 py-1.5 bg-slate-950/60 hover:bg-slate-900 text-slate-300 hover:text-cyan-400 text-xs font-semibold rounded-lg border border-slate-800/80 active:scale-95 transition-all cursor-pointer"
-            >
-              <RefreshCw size={14} className={refreshing ? "animate-spin text-cyan-400" : ""} />
-              새로고침
-            </button>
-          </div>
-        </header>
+          <button
+            onClick={handleRefresh}
+            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-950/60 hover:bg-slate-900 text-slate-300 hover:text-cyan-400 text-xs font-semibold rounded-xl border border-slate-800/80 active:scale-95 transition-all cursor-pointer"
+          >
+            <RefreshCw size={14} className={refreshing ? "animate-spin text-cyan-400" : ""} />
+            새로고침
+          </button>
+        </div>
+      </aside>
 
-        {/* Dashboard/Strategy View Router */}
-        <main className="space-y-6">
+      {/* 2. Main Content Frame (Wider Width) */}
+      <div className="flex-1 flex flex-col min-h-screen overflow-y-auto">
+        <main className="flex-1 p-6 sm:p-8 lg:p-10 space-y-6 w-full max-w-none z-10">
           {currentView === "DASHBOARD" && (
             <>
               {/* 글로벌 다중 자산 실시간 모니터링 */}
@@ -252,6 +286,7 @@ function App() {
                 stockWeight={stockWeight}
                 coinWeight={coinWeight}
                 cashWeight={cashWeight}
+                onClickTotalAsset={() => setCurrentView("ACCOUNT_DETAILS")}
               />
 
               {/* Section 2: Strategy 구동 및 시그널 */}
@@ -318,11 +353,15 @@ function App() {
           {currentView === "MACRO_DASHBOARD" && (
             <MacroDashboard />
           )}
+
+          {currentView === "ACCOUNT_DETAILS" && (
+            <AccountDetails onBack={() => setCurrentView("DASHBOARD")} />
+          )}
         </main>
 
         {/* Footer */}
-        <footer className="text-center py-8 text-[10px] text-slate-600 font-medium border-t border-slate-900/50 mt-12">
-          &copy; {new Date().getFullYear()} pj_invest_platform &bull; All Rights Reserved &bull; Premium Quantum Dashboard
+        <footer className="text-center py-6 text-[10px] text-slate-600 font-medium border-t border-slate-900/30 mt-auto">
+          &copy; {new Date().getFullYear()} pj_invest_platform &bull; All Rights Reserved &bull; Premium Sidebar Dashboard
         </footer>
       </div>
     </div>

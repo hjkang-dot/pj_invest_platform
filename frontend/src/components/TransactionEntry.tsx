@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { 
   PlusCircle, 
   Trash2, 
@@ -18,6 +18,7 @@ export interface Transaction {
   qty: number;
   fee: number;
   memo: string;
+  currency: "KRW" | "USD";
 }
 
 interface TransactionEntryProps {
@@ -26,6 +27,12 @@ interface TransactionEntryProps {
   transactions: Transaction[];
   onAddTransaction: (tx: Omit<Transaction, "id">) => void;
   onDeleteTransaction: (id: string) => void;
+}
+
+interface StockSuggestion {
+  code: string;
+  name: string;
+  market: string;
 }
 
 export const TransactionEntry: React.FC<TransactionEntryProps> = ({
@@ -50,6 +57,56 @@ export const TransactionEntry: React.FC<TransactionEntryProps> = ({
   const [qty, setQty] = useState("");
   const [fee, setFee] = useState("0");
   const [memo, setMemo] = useState("");
+  const [currency, setCurrency] = useState<Transaction["currency"]>("KRW");
+
+  // Autocomplete states
+  const [suggestions, setSuggestions] = useState<StockSuggestion[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Automatically adjust currency based on assetClass selection
+  useEffect(() => {
+    if (assetClass === "FUTURES" || assetClass === "COIN") {
+      setCurrency("USD");
+    } else {
+      setCurrency("KRW");
+    }
+  }, [assetClass]);
+
+  // Autocomplete fetch with debounce
+  useEffect(() => {
+    if (!symbol.trim()) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+
+    const delayDebounceFn = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/stocks/search?q=${encodeURIComponent(symbol)}&market=${assetClass}`);
+        if (res.ok) {
+          const data = await res.json();
+          setSuggestions(data);
+          setShowSuggestions(data.length > 0);
+        }
+      } catch (e) {
+        console.error("Failed to fetch search suggestions", e);
+      }
+    }, 250); // 250ms debounce
+
+    return () => clearTimeout(delayDebounceFn);
+  }, [symbol, assetClass]);
+
+  // Close dropdown on click outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setShowSuggestions(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   const handleCashSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -86,7 +143,8 @@ export const TransactionEntry: React.FC<TransactionEntryProps> = ({
       price: pVal,
       qty: qVal,
       fee: fVal,
-      memo
+      memo,
+      currency
     });
 
     // Reset inputs except date
@@ -98,11 +156,36 @@ export const TransactionEntry: React.FC<TransactionEntryProps> = ({
     setMemo("");
   };
 
+  const selectSuggestion = (item: StockSuggestion) => {
+    setSymbol(item.code);
+    setName(item.name);
+    
+    // Auto adjust asset class based on stock market info
+    if (item.market === "FUTURES") {
+      setAssetClass("FUTURES");
+    } else if (item.market === "COIN") {
+      setAssetClass("COIN");
+    } else {
+      setAssetClass("STOCK");
+    }
+    
+    setShowSuggestions(false);
+  };
+
   const formatKRW = (val: number) => {
     return new Intl.NumberFormat("ko-KR", {
       style: "currency",
       currency: "KRW",
       maximumFractionDigits: 0
+    }).format(val);
+  };
+
+  const formatUSD = (val: number) => {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
     }).format(val);
   };
 
@@ -237,16 +320,51 @@ export const TransactionEntry: React.FC<TransactionEntryProps> = ({
                 </select>
               </div>
 
-              <div>
+              {/* Symbol Input with Autocomplete Dropdown */}
+              <div className="relative" ref={dropdownRef}>
                 <label className="text-[10px] text-slate-400 font-bold block mb-1">종목코드 / 티커</label>
                 <input 
                   type="text"
                   placeholder="예: 005930 또는 BTC_USDT"
                   value={symbol}
-                  onChange={(e) => setSymbol(e.target.value)}
+                  onChange={(e) => {
+                    setSymbol(e.target.value);
+                    setShowSuggestions(true);
+                  }}
+                  onFocus={() => {
+                    if (symbol.trim()) setShowSuggestions(true);
+                  }}
                   className="w-full bg-slate-950/60 border border-slate-800 text-slate-300 px-3 py-2 text-xs font-semibold rounded-lg focus:outline-none focus:border-cyan-500/50 font-mono"
                   required
                 />
+                
+                {/* Autocomplete Dropbox */}
+                {showSuggestions && suggestions.length > 0 && (
+                  <div className="absolute left-0 right-0 bg-slate-950/95 backdrop-blur-md border border-slate-800 rounded-xl shadow-2xl mt-1 max-h-56 overflow-y-auto z-50 overflow-x-hidden">
+                    {suggestions.map((item) => (
+                      <button
+                        key={item.code}
+                        type="button"
+                        onClick={() => selectSuggestion(item)}
+                        className="w-full px-4 py-2.5 hover:bg-slate-900 transition text-left cursor-pointer flex justify-between items-center border-b border-slate-900/50 last:border-b-0"
+                      >
+                        <div className="flex flex-col">
+                          <span className="text-xs font-bold text-slate-200">{item.name}</span>
+                          <span className="text-[10px] text-slate-500 font-mono mt-0.5">{item.code}</span>
+                        </div>
+                        <span className={`text-[8px] font-black px-1.5 py-0.5 rounded uppercase ${
+                          item.market === "STOCK" 
+                            ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/10"
+                            : item.market === "COIN"
+                            ? "bg-cyan-500/10 text-cyan-400 border border-cyan-500/10"
+                            : "bg-amber-500/10 text-amber-400 border border-amber-500/10"
+                        }`}>
+                          {item.market}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div>
@@ -265,11 +383,37 @@ export const TransactionEntry: React.FC<TransactionEntryProps> = ({
             {/* Form Row 3 */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
-                <label className="text-[10px] text-slate-400 font-bold block mb-1">거래 단가 (Price)</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[10px] text-slate-400 font-bold">거래 단가 (Price)</label>
+                  <div className="flex gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setCurrency("KRW")}
+                      className={`px-1.5 py-0.5 rounded text-[8px] font-black border transition cursor-pointer ${
+                        currency === "KRW"
+                          ? "bg-cyan-500/20 text-cyan-400 border-cyan-500/25"
+                          : "border-slate-800/80 text-slate-500 hover:text-slate-400"
+                      }`}
+                    >
+                      KRW (₩)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCurrency("USD")}
+                      className={`px-1.5 py-0.5 rounded text-[8px] font-black border transition cursor-pointer ${
+                        currency === "USD"
+                          ? "bg-amber-500/20 text-amber-400 border-amber-500/25"
+                          : "border-slate-800/80 text-slate-500 hover:text-slate-400"
+                      }`}
+                    >
+                      USD ($)
+                    </button>
+                  </div>
+                </div>
                 <input 
                   type="number"
                   step="any"
-                  placeholder="예: 72000"
+                  placeholder={currency === "USD" ? "예: 100.00" : "예: 72000"}
                   value={price}
                   onChange={(e) => setPrice(e.target.value)}
                   className="w-full bg-slate-950/60 border border-slate-800 text-slate-300 px-3 py-2 text-xs font-semibold rounded-lg focus:outline-none focus:border-cyan-500/50 font-mono"
@@ -278,7 +422,7 @@ export const TransactionEntry: React.FC<TransactionEntryProps> = ({
               </div>
 
               <div>
-                <label className="text-[10px] text-slate-400 font-bold block mb-1">거래 수량 (Qty)</label>
+                <label className="text-[10px] text-slate-400 font-bold block mb-1.5">거래 수량 (Qty)</label>
                 <input 
                   type="number"
                   step="any"
@@ -291,7 +435,7 @@ export const TransactionEntry: React.FC<TransactionEntryProps> = ({
               </div>
 
               <div>
-                <label className="text-[10px] text-slate-400 font-bold block mb-1">수수료 (Optional)</label>
+                <label className="text-[10px] text-slate-400 font-bold block mb-1.5">수수료 (Optional)</label>
                 <input 
                   type="number"
                   step="any"
@@ -354,7 +498,7 @@ export const TransactionEntry: React.FC<TransactionEntryProps> = ({
                         <span className="text-[9px] text-slate-500 font-mono">[{tx.symbol}]</span>
                       </div>
                       <div className="text-[10px] text-slate-400 font-mono">
-                        수량: {tx.qty} | 단가: {tx.price.toLocaleString()}
+                        수량: {tx.qty} | 단가: {tx.currency === "USD" ? formatUSD(tx.price) : formatKRW(tx.price)}
                       </div>
                       <div className="text-[8px] text-slate-500 font-mono mt-0.5">
                         {tx.date} {tx.memo && `| ${tx.memo}`}

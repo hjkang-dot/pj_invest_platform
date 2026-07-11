@@ -3,25 +3,37 @@ import numpy as np
 from app.strategies.base import BaseStrategy
 
 class DeadCatShortStrategy(BaseStrategy):
-    def __init__(self, long_period=120, short_period=20, rsi_period=14, rsi_overbought=60,
-                 atr_period=14, stop_atr_mult=2.0, take_atr_mult=3.0):
-        super().__init__(name=f"DeadCatShort_{long_period}_{short_period}")
+    """
+    Late Confirmation Pump & Dump Short Strategy:
+    1. Detects a pump (+30% from local min to local max) within a lookback window (e.g. 20 bars).
+    2. Verifies that the peak of the pump was accompanied by volume distribution (e.g. >= 4x of normal volume).
+    3. Triggers SHORT when the coin enters the "oblivion/bleeding phase":
+       - Volume has dried up completely (Dying Volume: <= 10% of peak volume).
+       - Price has broken down significantly (Breakdown: >= 30% drop from peak).
+       - Price is still above the pump starting point (local_min).
+    4. Places a fixed, ultra-tight stop loss at entry_price + 8% to limit drawdown from short squeezes.
+    5. Sets a high take profit target at entry_price - 45% to harvest the bleeding, yielding a 1:5.6 Risk-Reward ratio.
+    """
+    def __init__(self, long_period=120, pump_lookback=20, pump_threshold=0.30,
+                 vol_climax_factor=4.0, vol_die_ratio=0.10, breakdown_threshold=0.30,
+                 stop_loss_pct=0.08, take_profit_pct=0.45):
+        super().__init__(name=f"LatePumpDumpShort_{pump_lookback}")
         self.long_period = long_period
-        self.short_period = short_period
-        self.rsi_period = rsi_period
-        self.rsi_overbought = rsi_overbought
-        self.atr_period = atr_period
-        self.stop_atr_mult = stop_atr_mult
-        self.take_atr_mult = take_atr_mult
-        self.min_required_bars = max(self.long_period + 5, self.rsi_period + 5, self.atr_period + 5, 30)
+        self.pump_lookback = pump_lookback
+        self.pump_threshold = pump_threshold
+        self.vol_climax_factor = vol_climax_factor
+        self.vol_die_ratio = vol_die_ratio
+        self.breakdown_threshold = breakdown_threshold
+        self.stop_loss_pct = stop_loss_pct
+        self.take_profit_pct = take_profit_pct
+        
+        self.min_required_bars = max(self.long_period + 5, self.pump_lookback + 10, 35)
 
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Calculates indicators for Dead Cat Bounce short strategy:
-        - MA Long (e.g. 120 SMA)
-        - MA Short (e.g. 20 SMA)
-        - RSI (e.g. 14 RSI)
-        - ATR (e.g. 14 ATR for Stop Loss and Take Profit)
+        Calculates baseline indicators:
+        - vol_ma_30: normal average trading volume
+        - ma_long: 120-day SMA for trend filter
         """
         # Ensure numeric types
         df['c'] = pd.to_numeric(df['c'])
@@ -29,97 +41,93 @@ class DeadCatShortStrategy(BaseStrategy):
         df['l'] = pd.to_numeric(df['l'])
         df['v'] = pd.to_numeric(df['v'])
 
-        # 1. Long-term trend indicator (120-day SMA)
+        # Baseline volume (30-period simple moving average)
+        df['vol_ma_30'] = df['v'].rolling(window=30).mean()
+        
+        # Long-term trend filter (120-day SMA)
         df['ma_long'] = df['c'].rolling(window=self.long_period).mean()
-
-        # 2. Short-term trend indicator (20-day SMA)
-        df['ma_short'] = df['c'].rolling(window=self.short_period).mean()
-
-        # 3. RSI(14)
-        delta = df['c'].diff()
-        gain = (delta.where(delta > 0, 0.0)).ewm(alpha=1/self.rsi_period, adjust=False).mean()
-        loss = (-delta.where(delta < 0, 0.0)).ewm(alpha=1/self.rsi_period, adjust=False).mean()
-        rs = gain / (loss + 1e-9)
-        df['rsi'] = 100 - (100 / (1 + rs))
-
-        # 4. Wilder's ATR(14)
-        df['prev_c'] = df['c'].shift(1)
-        df['tr1'] = df['h'] - df['l']
-        df['tr2'] = (df['h'] - df['prev_c']).abs()
-        df['tr3'] = (df['l'] - df['prev_c']).abs()
-        df['tr'] = df[['tr1', 'tr2', 'tr3']].max(axis=1)
-        df['atr'] = df['tr'].ewm(alpha=1/self.atr_period, adjust=False).mean()
-
-        # Cleanup temp columns
-        temp_cols = ['prev_c', 'tr1', 'tr2', 'tr3', 'tr']
-        df = df.drop(columns=[col for col in temp_cols if col in df.columns], errors='ignore')
 
         return df
 
     def check_signal(self, df: pd.DataFrame) -> str:
         """
-        Generates Short entry or Exit signal based on conditions:
-        - ENTRY SHORT:
-            1. Long-term downtrend (c < ma_long)
-            2. Had a short-term bounce (RSI peaked over rsi_overbought or price crossed above ma_short within last 5 bars)
-            3. Price crosses down below ma_short OR RSI crosses down below rsi_overbought.
-        - EXIT SHORT:
-            1. RSI enters oversold area (rsi <= 35) to lock profits early or avoid deep bounces.
+        Scans the recent lookback window for the end of a Pump & Dump cycle.
         """
         if len(df) < self.min_required_bars:
             return "NONE"
 
-        # Check last few rows
+        # Fetch current slice of lookback
+        recent_slice = df.iloc[-self.pump_lookback:]
+        
+        # Calculate local extremes
+        local_min = recent_slice['l'].min()
+        local_max = recent_slice['h'].max()
+        
+        if local_min <= 0:
+            return "NONE"
+            
+        # 1. Check if a qualified pump occurred (+30% or higher)
+        pump_pct = (local_max - local_min) / local_min
+        if pump_pct < self.pump_threshold:
+            return "NONE"
+            
+        # Find the peak price index inside the lookback slice
+        max_idx = recent_slice['h'].idxmax()
+        peak_row = df.loc[max_idx]
+        
+        peak_vol = peak_row['v']
+        peak_price = peak_row['h']
+        
+        # 2. Check if the peak had distribution volume (>= 4x of baseline volume at that time)
+        vol_baseline = peak_row['vol_ma_30'] if 'vol_ma_30' in peak_row and pd.notna(peak_row['vol_ma_30']) else 1.0
+        if vol_baseline <= 0:
+            vol_baseline = 1.0
+            
+        has_distribution = peak_vol >= (vol_baseline * self.vol_climax_factor)
+        if not has_distribution:
+            return "NONE"
+            
+        # 3. Analyze post-peak candles (from the peak index to current row)
         curr_row = df.iloc[-1]
-        prev_row = df.iloc[-2]
-
-        c = curr_row['c']
-        prev_c = prev_row['c']
-        ma_long = curr_row['ma_long']
-        ma_short = curr_row['ma_short']
-        prev_ma_short = prev_row['ma_short']
-        rsi = curr_row['rsi']
-        prev_rsi = prev_row['rsi']
-
-        # 1. Long-term downtrend filter
-        is_downtrend = c < ma_long
-
-        # 2. Check if we had a short-term bounce recently (lookback: index -5 to -2)
-        has_recent_bounce = False
-        lookback_range = range(2, 6) # index -2 to -5
-        for i in lookback_range:
-            row = df.iloc[-i]
-            if row['c'] >= row['ma_short'] or row['rsi'] >= self.rsi_overbought:
-                has_recent_bounce = True
-                break
-
-        if is_downtrend and has_recent_bounce:
-            # Entry condition 1: Cross down ma_short
-            cross_down_ma = (prev_c >= prev_ma_short) and (c < ma_short)
-            # Entry condition 2: RSI crosses down below rsi_overbought
-            cross_down_rsi = (prev_rsi >= self.rsi_overbought) and (rsi < self.rsi_overbought)
-
-            if cross_down_ma or cross_down_rsi:
-                return "SHORT"
-
-        # Exit condition: RSI reaches oversold level (e.g. 35)
-        if rsi <= 35:
-            return "EXIT"
+        c_price = curr_row['c']
+        c_vol = curr_row['v']
+        
+        # Current index in dataframe
+        curr_idx = df.index[-1]
+        
+        # Ensure current index is strictly after the peak index (we only short the descent)
+        if curr_idx <= max_idx:
+            return "NONE"
+            
+        # Check if volume has dried up completely (Dying Volume: <= 10% of peak volume)
+        volume_died = c_vol <= (peak_vol * self.vol_die_ratio)
+        
+        # Check if price has broken down significantly (Breakdown: >= 30% drop from peak price)
+        price_drop = (peak_price - c_price) / peak_price
+        price_broken = price_drop >= self.breakdown_threshold
+        
+        # Guard: Do not short if price has already bled past the local minimum (pump starting point)
+        too_far_gone = c_price <= local_min
+        
+        if volume_died and price_broken and not too_far_gone:
+            return "SHORT"
 
         return "NONE"
 
     def get_stop_loss_price(self, df: pd.DataFrame, entry_price: float, pos_type: str) -> float:
-        curr_row = df.iloc[-1]
-        atr = curr_row['atr'] if 'atr' in curr_row else entry_price * 0.02
+        """
+        Places a fixed, ultra-tight stop loss at entry price + 8%.
+        """
         if pos_type == "SHORT":
-            return entry_price + (self.stop_atr_mult * atr)
+            return entry_price * (1.0 + self.stop_loss_pct)
         else:
-            return entry_price - (self.stop_atr_mult * atr) # For safety
+            return entry_price * (1.0 - self.stop_loss_pct)
 
     def get_take_profit_price(self, df: pd.DataFrame, entry_price: float, pos_type: str) -> float:
-        curr_row = df.iloc[-1]
-        atr = curr_row['atr'] if 'atr' in curr_row else entry_price * 0.05
+        """
+        Places a high take profit target 45% below the entry price.
+        """
         if pos_type == "SHORT":
-            return entry_price - (self.take_atr_mult * atr)
+            return entry_price * (1.0 - self.take_profit_pct)
         else:
-            return entry_price + (self.take_atr_mult * atr) # For safety
+            return entry_price * (1.0 + self.take_profit_pct)
