@@ -181,20 +181,78 @@ function App() {
             </button>
 
             {/* Strategy list & detail */}
-            <button
-              onClick={() => {
-                setCurrentView("STRATEGY_LIST");
-                setSelectedStrategyId(null);
-              }}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
-                currentView === "STRATEGY_LIST" || currentView === "STRATEGY_DETAIL"
-                  ? "bg-cyan-500/15 text-cyan-400 border-cyan-500/20 shadow-sm shadow-cyan-500/5"
-                  : "text-slate-400 hover:text-slate-200 border-transparent hover:bg-slate-900/20"
-              }`}
-            >
-              <Compass size={16} />
-              전략 분석
-            </button>
+            <div className="flex flex-col gap-1">
+              <button
+                onClick={() => {
+                  setCurrentView("STRATEGY_LIST");
+                  setSelectedStrategyId(null);
+                }}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
+                  currentView === "STRATEGY_LIST" || currentView === "STRATEGY_DETAIL"
+                    ? "bg-cyan-500/15 text-cyan-400 border-cyan-500/20 shadow-sm shadow-cyan-500/5"
+                    : "text-slate-400 hover:text-slate-200 border-transparent hover:bg-slate-900/20"
+                }`}
+              >
+                <Compass size={16} />
+                전략 분석
+              </button>
+
+              {/* Sub-menu for strategies */}
+              {(currentView === "STRATEGY_LIST" || currentView === "STRATEGY_DETAIL") && (
+                <div className="mt-1 ml-4 pl-3 border-l border-slate-800/80 flex flex-col gap-1">
+                  <button
+                    onClick={() => handleSelectStrategy("ud_dividend")}
+                    className={`w-full text-left px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                      selectedStrategyId === "ud_dividend"
+                        ? "text-cyan-400 bg-cyan-500/10"
+                        : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/20"
+                    }`}
+                  >
+                    저평가 고배당
+                  </button>
+                  <button
+                    onClick={() => handleSelectStrategy("op_growth")}
+                    className={`w-full text-left px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                      selectedStrategyId === "op_growth"
+                        ? "text-cyan-400 bg-cyan-500/10"
+                        : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/20"
+                    }`}
+                  >
+                    우량 기회 성장
+                  </button>
+                  <button
+                    onClick={() => handleSelectStrategy("sector_growth")}
+                    className={`w-full text-left px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                      selectedStrategyId === "sector_growth"
+                        ? "text-cyan-400 bg-cyan-500/10"
+                        : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/20"
+                    }`}
+                  >
+                    섹터 분산 성장
+                  </button>
+                  <button
+                    onClick={() => handleSelectStrategy("deep_value_contra")}
+                    className={`w-full text-left px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                      selectedStrategyId === "deep_value_contra"
+                        ? "text-cyan-400 bg-cyan-500/10"
+                        : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/20"
+                    }`}
+                  >
+                    낙폭과대 역발상
+                  </button>
+                  <button
+                    onClick={() => handleSelectStrategy("vol_climax")}
+                    className={`w-full text-left px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                      selectedStrategyId === "vol_climax"
+                        ? "text-cyan-400 bg-cyan-500/10"
+                        : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/20"
+                    }`}
+                  >
+                    거래량 클라이맥스
+                  </button>
+                </div>
+              )}
+            </div>
 
             {/* Transaction entry */}
             <button
@@ -314,6 +372,11 @@ function App() {
           {currentView === "STRATEGY_DETAIL" && (
             <StrategyDetail 
               strategyId={selectedStrategyId || ""} 
+              transactions={transactions}
+              onSelectStock={(code) => {
+                setSelectedStockCode(code);
+                setCurrentView("STOCK_DETAIL");
+              }}
               onBack={() => {
                 setCurrentView("STRATEGY_LIST");
                 setSelectedStrategyId(null);

@@ -4,6 +4,29 @@ import os
 # Resolves C:\pyproject\pj_invest_platform\data\invest_platform.db
 DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "data", "invest_platform.db"))
 
+def table_exists(cursor, table_name: str) -> bool:
+    cursor.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    )
+    return cursor.fetchone() is not None
+
+def column_exists(cursor, table_name: str, column_name: str) -> bool:
+    cursor.execute(f"PRAGMA table_info({table_name})")
+    return any(row[1] == column_name for row in cursor.fetchall())
+
+def add_column_if_missing(cursor, table_name: str, column_name: str, column_definition: str):
+    if table_exists(cursor, table_name) and not column_exists(cursor, table_name, column_name):
+        cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}")
+
+def migrate_db(conn):
+    """
+    Applies lightweight SQLite schema migrations for existing local databases.
+    Keep migrations additive so user data remains untouched.
+    """
+    cursor = conn.cursor()
+    add_column_if_missing(cursor, "strategy_backtests", "simulated_trades", "TEXT")
+
 def init_db(db_path=DB_PATH):
     """
     Initializes the SQLite database and creates the required tables if not exists.
@@ -337,6 +360,24 @@ def init_db(db_path=DB_PATH):
             PRIMARY KEY (event_date, event_name, country)
         )
     """)
+
+    # Create strategy_backtests table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS strategy_backtests (
+            strategy_id TEXT PRIMARY KEY,
+            cum_return REAL NOT NULL,
+            mdd REAL NOT NULL,
+            sharpe REAL NOT NULL,
+            win_rate REAL NOT NULL,
+            profit_factor REAL NOT NULL,
+            total_trades INTEGER NOT NULL,
+            chart_path TEXT NOT NULL,
+            simulated_trades TEXT,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    migrate_db(conn)
     
     conn.commit()
     conn.close()
@@ -557,13 +598,13 @@ def get_daily_prices(start_date=None, end_date=None, stock_code=None, limit=None
 
 def get_existing_trade_dates(start_date: str, db_path=DB_PATH) -> set:
     """
-    Gets unique trade dates from daily_prices starting from start_date.
+    Gets unique trade dates from daily_prices starting from start_date that have KRX stocks.
     """
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     cursor.execute("""
         SELECT DISTINCT trade_date FROM daily_prices 
-        WHERE trade_date >= ?
+        WHERE trade_date >= ? AND market IN ('KOSPI', 'KOSDAQ')
     """, (start_date,))
     rows = cursor.fetchall()
     conn.close()

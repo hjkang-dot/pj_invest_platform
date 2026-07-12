@@ -43,10 +43,21 @@ export const StrategyList: React.FC<StrategyListProps> = ({ onSelectStrategy }) 
       type: "CORE",
       targetAsset: "국내 주식 / 미국 테크",
       allocation: 30,
-      backtestReturn: 24.8,
-      mdd: 8.5,
+      backtestReturn: 240.8,
+      mdd: 4.0,
       status: "ACTIVE",
       description: "높은 자기자본이익률(ROE)과 합리적인 가치 평가(PEG) 기준을 결합하여, 실적 개선세가 뚜렷한 우량 성장주를 선별합니다."
+    },
+    {
+      id: "sector_growth",
+      name: "섹터 분산 성장 스크리닝 전략",
+      type: "CORE",
+      targetAsset: "국내 주식 (KRX)",
+      allocation: 20,
+      backtestReturn: 97.2,
+      mdd: 11.3,
+      status: "ACTIVE",
+      description: "섹터 중복을 배제하고 섹터 별로 최우량 성장 종목을 1개씩만 선정하여 분산 투자합니다. 부합하는 종목이 부족할 경우 현금 비중을 유지합니다."
     },
     {
       id: "deep_value_contra",

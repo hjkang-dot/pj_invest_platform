@@ -315,6 +315,7 @@ export const TransactionEntry: React.FC<TransactionEntryProps> = ({
                   <option value="NONE">직접 매매 (전략 없음)</option>
                   <option value="ud_dividend">저평가 고배당 스크리닝</option>
                   <option value="op_growth">우량 기회 성장 스크리닝</option>
+                  <option value="sector_growth">섹터 분산 성장 스크리닝</option>
                   <option value="deep_value_contra">낙폭과대 역발상 매수</option>
                   <option value="vol_climax">거래량 클라이맥스 돌파</option>
                 </select>

@@ -51,6 +51,7 @@ def fetch_financial_statement(
 
     response = requests.get(DART_SINGLE_ACCOUNT_URL, params=params, timeout=30)
     response.raise_for_status()
+    response.encoding = "utf-8"
 
     payload = response.json()
     status = payload.get("status")
@@ -76,6 +77,7 @@ def fetch_dividend_info(
 
     response = requests.get(DART_DIVIDEND_URL, params=params, timeout=30)
     response.raise_for_status()
+    response.encoding = "utf-8"
 
     payload = response.json()
     status = payload.get("status")

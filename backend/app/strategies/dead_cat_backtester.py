@@ -40,14 +40,12 @@ def load_data(contract: str, interval: str, limit=1200) -> pd.DataFrame:
     return df
 
 def run_backtest(contract: str, interval: str, initial_balance=10000.0,
-                 long_p=120, pump_lookback=20, pump_thresh=0.30,
-                 vol_climax=4.0, vol_die=0.10, breakdown_thresh=0.30,
-                 stop_loss_pct=0.08, take_profit_pct=0.45, risk_pct=0.02):
+                 long_p=120, atr_mult=3.0, stop_loss_pct=0.08,
+                 take_profit_pct=0.30, risk_pct=0.02):
     
     print(f"=== Backtest Started ===")
     print(f"Contract: {contract} | Interval: {interval}")
-    print(f"Params: Long MA={long_p}, Lookback={pump_lookback}, Pump Thresh={pump_thresh * 100}%")
-    print(f"Params: Vol Climax={vol_climax}x, Vol Die Ratio={vol_die * 100}%, Breakdown={breakdown_thresh * 100}%")
+    print(f"Params: Long MA={long_p}, ATR Mult={atr_mult}x")
     print(f"TP/SL: Stop Loss={stop_loss_pct * 100}%, Take Profit={take_profit_pct * 100}%")
     print(f"Risk Target: {risk_pct * 100}% of balance per trade")
     print(f"Initial Balance: ${initial_balance:,.2f}")
@@ -74,11 +72,6 @@ def run_backtest(contract: str, interval: str, initial_balance=10000.0,
     # Initialize strategy
     strategy = DeadCatShortStrategy(
         long_period=long_p,
-        pump_lookback=pump_lookback,
-        pump_threshold=pump_thresh,
-        vol_climax_factor=vol_climax,
-        vol_die_ratio=vol_die,
-        breakdown_threshold=breakdown_thresh,
         stop_loss_pct=stop_loss_pct,
         take_profit_pct=take_profit_pct
     )
@@ -111,8 +104,8 @@ def run_backtest(contract: str, interval: str, initial_balance=10000.0,
         l = current_row['l']
         t = current_row['t']
         
-        # Prepare historical slice up to current index i for signal check
-        df_slice = df.iloc[:i+1]
+        # Prepare historical slice up to current index i-1 for signal check
+        df_slice = df.iloc[:i]
         
         # Track Equity Curve
         current_equity = balance
@@ -129,23 +122,22 @@ def run_backtest(contract: str, interval: str, initial_balance=10000.0,
             max_drawdown = drawdown
             
         if not in_position:
-            # Check for entry signal
-            signal = strategy.check_signal(df_slice)
+            # Calculate short limit order price based on historical data (before this bar)
+            limit_price = strategy.get_limit_order_price(df_slice, atr_mult=atr_mult)
             
-            # Apply BTC Market Regime Filter: only allow SHORT entry when BTC is in downtrend (btc_c < btc_ma_long)
+            # Apply BTC Market Regime Filter: only place limit order when BTC is in downtrend
             is_btc_downtrend = True
             if 'btc_c' in current_row and 'btc_ma_long' in current_row:
                 if pd.notna(current_row['btc_c']) and pd.notna(current_row['btc_ma_long']):
                     is_btc_downtrend = current_row['btc_c'] < current_row['btc_ma_long']
 
-            if signal == "SHORT" and is_btc_downtrend:
-                # Enter SHORT
-                entry_price = c
+            if limit_price > 0.0 and h >= limit_price and is_btc_downtrend:
+                # Enter SHORT at limit_price (caught the wick!)
+                entry_price = limit_price
                 stop_loss = strategy.get_stop_loss_price(df_slice, entry_price, "SHORT")
                 take_profit = strategy.get_take_profit_price(df_slice, entry_price, "SHORT")
                 
                 # ATR-based position sizing (Risk target based on risk_pct)
-                atr = current_row['atr'] if 'atr' in current_row and pd.notna(current_row['atr']) else entry_price * 0.02
                 risk_amount = balance * risk_pct
                 loss_per_coin = abs(stop_loss - entry_price)
                 
@@ -187,12 +179,6 @@ def run_backtest(contract: str, interval: str, initial_balance=10000.0,
             elif l <= take_profit:
                 exit_price = take_profit
                 exit_reason = "TAKE_PROFIT"
-            else:
-                # Check manual EXIT signal from RSI or indicators
-                signal = strategy.check_signal(df_slice)
-                if signal == "EXIT":
-                    exit_price = c
-                    exit_reason = "STRATEGY_EXIT"
             
             if exit_reason:
                 # Close Position
@@ -279,17 +265,13 @@ def show_available_contracts():
         print(f" - Contract: {r[0]} | Interval: {r[1]} | Candles Count: {r[2]}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Backtest Pump & Dump Short Strategy.")
+    parser = argparse.ArgumentParser(description="Backtest Wick Fading Limit Short Strategy.")
     parser.add_argument("--contract", type=str, default="BTC_USDT", help="Contract code (e.g. BTC_USDT)")
     parser.add_argument("--interval", type=str, default="1d", help="Candle interval (e.g. 1d, 1h, 15m)")
-    parser.add_argument("--long-p", type=int, default=120, help="Long MA period for BTC filter")
-    parser.add_argument("--lookback", type=int, default=20, help="Pump check lookback window size")
-    parser.add_argument("--pump-thresh", type=float, default=0.30, help="Pump threshold ratio (e.g. 0.3 for 30 percent)")
-    parser.add_argument("--vol-climax", type=float, default=4.0, help="Volume climax multiplier (e.g. 4.0 for 4x)")
-    parser.add_argument("--vol-die", type=float, default=0.10, help="Volume decay threshold (e.g. 0.1 for 10 percent of peak)")
-    parser.add_argument("--breakdown", type=float, default=0.30, help="Breakdown price drop threshold (e.g. 0.3 for 30 percent drop)")
-    parser.add_argument("--stop-loss", type=float, default=0.08, help="Stop loss margin percentage above entry")
-    parser.add_argument("--take-profit", type=float, default=0.45, help="Take profit target percentage below entry")
+    parser.add_argument("--long-p", type=int, default=120, help="Long MA period for downtrend filter")
+    parser.add_argument("--atr-mult", type=float, default=3.0, help="ATR multiplier for upper wick fading (default: 3.0)")
+    parser.add_argument("--stop-loss", type=float, default=0.08, help="Stop loss percentage above entry (default: 0.08)")
+    parser.add_argument("--take-profit", type=float, default=0.30, help="Take profit percentage below entry (default: 0.30)")
     parser.add_argument("--risk-pct", type=float, default=0.02, help="Risk target percentage of balance per trade (default: 0.02)")
     parser.add_argument("--list-available", action="store_true", help="List available contracts in DB")
     
@@ -302,11 +284,7 @@ if __name__ == "__main__":
             contract=args.contract,
             interval=args.interval,
             long_p=args.long_p,
-            pump_lookback=args.lookback,
-            pump_thresh=args.pump_thresh,
-            vol_climax=args.vol_climax,
-            vol_die=args.vol_die,
-            breakdown_thresh=args.breakdown,
+            atr_mult=args.atr_mult,
             stop_loss_pct=args.stop_loss,
             take_profit_pct=args.take_profit,
             risk_pct=args.risk_pct

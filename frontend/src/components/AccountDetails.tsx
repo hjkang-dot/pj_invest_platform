@@ -434,7 +434,7 @@ export const AccountDetails: React.FC<AccountDetailsProps> = ({ onBack }) => {
                 </div>
               </div>
               <span className="text-xs font-bold px-2.5 py-1 bg-cyan-500/10 text-cyan-400 border border-cyan-500/10 rounded-lg">
-                해외 선물 달러계좌
+                코인 달러계좌
               </span>
             </div>
 
@@ -513,7 +513,7 @@ export const AccountDetails: React.FC<AccountDetailsProps> = ({ onBack }) => {
                 </div>
               </div>
               <span className="text-xs font-bold px-2.5 py-1 bg-amber-500/10 text-amber-400 border border-amber-500/10 rounded-lg">
-                해외 주식/선물 USD계좌
+                해외 선물 USD계좌
               </span>
             </div>
 

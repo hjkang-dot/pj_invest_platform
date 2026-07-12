@@ -124,6 +124,9 @@ def screen_opportunity_growth_stocks(
         .merge(stocks[["stock_code", "listed_date", "sector"]], on="stock_code", how="left")
     )
 
+    if screened.empty:
+        return pd.DataFrame(columns=OUTPUT_COLUMNS)
+
     screened["stock_name"] = screened["stock_name"].fillna(screened["corp_name"])
     screened["dividend_years"] = screened["dividend_years"].fillna(0).astype("int64")
     screened["dividend_decrease_count"] = (
@@ -183,6 +186,8 @@ def screen_opportunity_growth_stocks(
         & (screened["market_cap"] > 0)
         & (screened["revenue_growth"] > 5.0)
         & (screened["roe"] >= 8.0)
+        & (screened["per"] > 0)
+        & (screened["per"] <= 30.0)
     )
 
     return (
