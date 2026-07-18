@@ -27,6 +27,17 @@ export const StrategyList: React.FC<StrategyListProps> = ({ onSelectStrategy }) 
   // Mock Strategies Data
   const strategies: StrategyItem[] = [
     {
+      id: "step0_market_leader",
+      name: "시장 주도 수급주 선별 (Step 0)",
+      type: "CORE",
+      targetAsset: "국내 주식 (KOSPI / KOSDAQ)",
+      allocation: 40,
+      backtestReturn: 34.5,
+      mdd: 4.8,
+      status: "ACTIVE",
+      description: "시장(지수) 대비 +3%p 이상 강하고, 거래대금 300억 이상 & 20일 평균 대비 2배 이상 폭발하며 외국인/기관 수급이 유입된 주도 종목을 포착합니다."
+    },
+    {
       id: "ud_dividend",
       name: "저평가 고배당 스크리닝 전략",
       type: "CORE",

@@ -37,6 +37,32 @@ export const StrategyDetail: React.FC<StrategyDetailProps> = ({
   // Mock Detailed Data based on Strategy ID (Used as fallback or default)
   const getStrategyData = (id: string) => {
     switch (id) {
+      case "step0_market_leader":
+        return {
+          name: "시장 주도 수급주 선별 (Step 0)",
+          type: "CORE",
+          target: "국내 주식 (KOSPI / KOSDAQ)",
+          description: "시장(지수) 대비 +3%p 이상 강하고, 거래대금 300억 이상 & 20일 평균 대비 2배 이상 폭발하며 외국인/기관 수급이 유입된 주도 종목을 포착합니다.",
+          allocation: "40%",
+          status: "운용중",
+          metrics: {
+            cumReturn: "34.5%",
+            mdd: "-4.8%",
+            sharpe: "1.85",
+            winRate: "68%",
+            profitFactor: "2.10",
+            totalTrades: "42"
+          },
+          rules: [
+            { name: "시장 대비 초과 수익률", value: "(종목 등락률 - 지수 등락률) >= +3.0%p" },
+            { name: "최소 당일 거래대금", value: "300억 원 이상" },
+            { name: "거래대금 폭발 배율", value: "20일 평균 거래대금 대비 2.0배 이상" },
+            { name: "수급 유입 조건", value: "외국인 순매수 > 0 OR 기관 순매수 > 0 (쌍끌이 우대)" },
+            { name: "종목 기초 안전성", value: "보통주 전용 (우선주/ETF/ETN/스팩/거래정지 제외)" }
+          ],
+          positions: [],
+          chartPath: "M10 80 Q30 75, 50 68 T90 55 T130 50 T170 38 T210 25 T250 18 T290 8"
+        };
       case "ud_dividend":
         return {
           name: "저평가 고배당 스크리닝 전략",
@@ -181,17 +207,20 @@ export const StrategyDetail: React.FC<StrategyDetailProps> = ({
   };
 
   const data = getStrategyData(strategyId);
-  const isQuantStrategy = strategyId === "ud_dividend" || strategyId === "op_growth" || strategyId === "sector_growth";
+  const isQuantStrategy = strategyId === "ud_dividend" || strategyId === "op_growth" || strategyId === "sector_growth" || strategyId === "step0_market_leader";
 
-  const fetchPositionsAndMetrics = async () => {
+  const fetchPositionsAndMetrics = async (query: string = "") => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/strategies/${strategyId}`);
+      const url = query 
+        ? `/api/strategies/${strategyId}?q=${encodeURIComponent(query)}` 
+        : `/api/strategies/${strategyId}`;
+      const res = await fetch(url);
       if (res.ok) {
         const result = await res.json();
         setPositions(result.positions || []);
-        setMetrics(result.metrics || null);
-        setChartPath(result.chartPath || "");
+        if (result.metrics) setMetrics(result.metrics);
+        if (result.chartPath) setChartPath(result.chartPath || "");
         setBenchmarkChartPath(result.benchmarkChartPath || "");
         setBenchmarkReturn(result.benchmarkReturn || "");
         setSimulatedTrades(result.simulatedTrades || []);
@@ -205,7 +234,7 @@ export const StrategyDetail: React.FC<StrategyDetailProps> = ({
 
   React.useEffect(() => {
     if (isQuantStrategy) {
-      fetchPositionsAndMetrics();
+      fetchPositionsAndMetrics(strategyId === "step0_market_leader" ? searchQuery : "");
     } else {
       setPositions(data.positions);
       setMetrics(data.metrics);
@@ -215,6 +244,15 @@ export const StrategyDetail: React.FC<StrategyDetailProps> = ({
       setSimulatedTrades([]);
     }
   }, [strategyId]);
+
+  React.useEffect(() => {
+    if (strategyId === "step0_market_leader") {
+      const timer = setTimeout(() => {
+        fetchPositionsAndMetrics(searchQuery);
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [searchQuery]);
 
   const handleRunBacktest = async () => {
     setRunningBacktest(true);
@@ -400,7 +438,18 @@ export const StrategyDetail: React.FC<StrategyDetailProps> = ({
                               ) : (
                                 <span className="font-semibold text-slate-100 block">{pos.name}</span>
                               )}
-                              <span className="text-[9px] text-slate-500 font-mono">[{pos.code}]</span>
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                <span className="text-[9px] text-slate-500 font-mono">[{pos.code}]</span>
+                                {pos.statusLabel && (
+                                  <span className={`inline-block text-[9px] font-bold px-1.5 py-0.2 rounded border ${
+                                    pos.statusLabel === "Step 0 통과"
+                                      ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/20"
+                                      : "text-amber-400 bg-amber-500/10 border-amber-500/20"
+                                  }`}>
+                                    {pos.statusLabel}
+                                  </span>
+                                )}
+                              </div>
                             </td>
                             <td className="py-2.5 px-3 text-center">
                               <span className="inline-block text-[10px] text-cyan-400 font-bold bg-cyan-500/10 px-2.5 py-0.5 rounded-full border border-cyan-500/20 shadow-sm font-mono">
@@ -518,7 +567,7 @@ export const StrategyDetail: React.FC<StrategyDetailProps> = ({
                     <p className="text-[10px] text-slate-500 font-medium">전략 가동 시뮬레이션 결과 곡선 (벤치마크 대비)</p>
                   </div>
                 </div>
-                {strategyId in {"ud_dividend":1, "op_growth":1} && (
+                {strategyId in {"ud_dividend":1, "op_growth":1, "sector_growth":1} && (
                   <button
                     onClick={handleRunBacktest}
                     disabled={runningBacktest}

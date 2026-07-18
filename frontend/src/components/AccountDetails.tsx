@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { ArrowLeft, Wallet, TrendingUp, ShieldAlert, Award } from "lucide-react";
+import { ArrowLeft, Wallet, TrendingUp, ShieldAlert, Award, RefreshCw } from "lucide-react";
+import { KisTradingPanel } from "./KisTradingPanel";
 
 interface StockHolding {
   code: string;
@@ -15,9 +16,12 @@ interface CoinPosition {
   contract: string;
   size: number;
   posType: "LONG" | "SHORT";
+  leverage?: number;
   entryPrice: number;
   markPrice: number;
   value: number;
+  margin?: number;
+  liqPrice?: number;
   unrealisedPnl: number;
   pnlPct: number;
 }
@@ -302,6 +306,9 @@ export const AccountDetails: React.FC<AccountDetailsProps> = ({ onBack }) => {
         </div>
       </div>
 
+      {/* 한국투자증권 (KIS) 실계좌 트레이딩 & 잔고 모듈 */}
+      <KisTradingPanel />
+
       {/* Grid Accounts Detail (3-Column Layout for Full-width) */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
@@ -459,7 +466,19 @@ export const AccountDetails: React.FC<AccountDetailsProps> = ({ onBack }) => {
 
             {/* Positions Table */}
             <div className="overflow-x-auto">
-              <h4 className="text-xs font-bold text-slate-400 mb-3">실시간 선물 보유 포지션</h4>
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-xs font-bold text-slate-400">실시간 선물 보유 포지션</h4>
+                <button
+                  type="button"
+                  onClick={fetchAccountData}
+                  className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-cyan-400 text-[10px] font-bold rounded-lg border border-slate-800/80 active:scale-95 transition cursor-pointer"
+                  title="포지션 및 수익률 즉시 업데이트"
+                >
+                  <RefreshCw size={11} className={loading ? "animate-spin text-cyan-400" : ""} />
+                  실시간 업데이트
+                </button>
+              </div>
+
               {coinAccount.positions.length === 0 ? (
                 <div className="py-8 text-center text-xs text-slate-600 bg-slate-950/20 rounded-lg border border-dashed border-slate-900">
                   현재 보유 중인 선물 포지션이 없습니다.
@@ -468,27 +487,34 @@ export const AccountDetails: React.FC<AccountDetailsProps> = ({ onBack }) => {
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="border-b border-slate-900/80 text-[10px] text-slate-500 font-bold uppercase tracking-wider">
-                      <th className="py-2.5">계약명</th>
+                      <th className="py-2.5">계약명 (레버리지)</th>
                       <th className="py-2.5">구분</th>
-                      <th className="py-2.5 text-right">포지션</th>
-                      <th className="py-2.5 text-right">수익률</th>
+                      <th className="py-2.5 text-right">수량</th>
+                      <th className="py-2.5 text-right">포지션 가치</th>
+                      <th className="py-2.5 text-right">수익률 (ROE)</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-900/40 text-xs font-mono">
                     {coinAccount.positions.map((pos, i) => (
                       <tr key={i} className="hover:bg-slate-900/20 transition-all">
                         <td className="py-2.5 font-sans font-semibold text-slate-300">
-                          {pos.contract}
+                          <div className="flex items-center gap-1.5">
+                            <span>{pos.contract}</span>
+                            <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 text-[9px] font-bold font-mono">
+                              {pos.leverage || 1}x
+                            </span>
+                          </div>
                         </td>
                         <td className="py-2.5">
-                          <span className={`px-1 py-0.5 rounded text-[9px] font-bold ${pos.posType === "LONG" ? "bg-emerald-500/10 text-emerald-400" : "bg-rose-500/10 text-rose-400"
-                            }`}>
+                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${pos.posType === "LONG" ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" : "bg-rose-500/10 text-rose-400 border border-rose-500/20"}`}>
                             {pos.posType}
                           </span>
                         </td>
                         <td className="py-2.5 text-right text-slate-300">{pos.size}</td>
+                        <td className="py-2.5 text-right text-slate-200 font-bold">{formatUSD(pos.value)}</td>
                         <td className={`py-2.5 text-right font-bold ${pos.pnlPct >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                          {pos.pnlPct >= 0 ? "+" : ""}{pos.pnlPct.toFixed(2)}%
+                          <div>{pos.pnlPct >= 0 ? "+" : ""}{pos.pnlPct.toFixed(2)}%</div>
+                          <div className="text-[10px] opacity-80">{pos.unrealisedPnl >= 0 ? "+" : ""}{formatUSD(pos.unrealisedPnl)}</div>
                         </td>
                       </tr>
                     ))}

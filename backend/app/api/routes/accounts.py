@@ -101,25 +101,47 @@ def get_accounts():
                     continue
                 entry_p = float(pos.get("entry_price", 0))
                 mark_p = float(pos.get("mark_price", 0))
+                unrealised_pnl = float(pos.get("unrealised_pnl", 0))
+                margin_val = float(pos.get("margin", 0)) or float(pos.get("initial_margin", 0))
+                leverage = int(float(pos.get("leverage", pos.get("lever", 1))))
+                liq_price = float(pos.get("liq_price", 0))
                 
                 pos_type = "SHORT" if size < 0 else "LONG"
-                if pos_type == "SHORT":
-                    pnl_pct = ((entry_p - mark_p) / entry_p) * 100 if entry_p > 0 else 0.0
+                
+                # ROE % (Return on Equity/Margin)
+                if margin_val > 0:
+                    pnl_pct = (unrealised_pnl / margin_val) * 100
                 else:
-                    pnl_pct = ((mark_p - entry_p) / entry_p) * 100 if entry_p > 0 else 0.0
+                    if pos_type == "SHORT":
+                        pnl_pct = ((entry_p - mark_p) / entry_p) * 100 * leverage if entry_p > 0 else 0.0
+                    else:
+                        pnl_pct = ((mark_p - entry_p) / entry_p) * 100 * leverage if entry_p > 0 else 0.0
                 
                 positions_list.append({
                     "contract": pos.get("contract"),
                     "size": abs(size),
                     "posType": pos_type,
+                    "leverage": leverage,
                     "entryPrice": entry_p,
                     "markPrice": mark_p,
                     "value": float(pos.get("value", 0)),
-                    "unrealisedPnl": float(pos.get("unrealised_pnl", 0)),
+                    "margin": margin_val,
+                    "liqPrice": liq_price,
+                    "unrealisedPnl": unrealised_pnl,
                     "pnlPct": round(pnl_pct, 2)
                 })
         except Exception as e:
             print(f"[Accounts Warning] Failed to fetch Aden account details: {e}")
+
+        # 5. Fetch KIS (한국투자증권) Account if configured
+        kis_account = None
+        try:
+            from app.clients.kis_client import KISClient
+            kis_client = KISClient()
+            if kis_client.is_configured() and kis_client.cano:
+                kis_account = kis_client.get_account_balance()
+        except Exception as e:
+            print(f"[Accounts Warning] Failed to fetch KIS account details: {e}")
 
         # Real-time portfolio totals
         coin_total_krw = coin_total_usd * usd_rate
@@ -180,7 +202,8 @@ def get_accounts():
                 "totalKrw": futures_total_krw,
                 "unrealisedPnlUsd": futures_pnl_usd,
                 "holdings": futures_list
-            }
+            },
+            "kisAccount": kis_account
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

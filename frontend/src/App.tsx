@@ -201,6 +201,16 @@ function App() {
               {(currentView === "STRATEGY_LIST" || currentView === "STRATEGY_DETAIL") && (
                 <div className="mt-1 ml-4 pl-3 border-l border-slate-800/80 flex flex-col gap-1">
                   <button
+                    onClick={() => handleSelectStrategy("step0_market_leader")}
+                    className={`w-full text-left px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                      selectedStrategyId === "step0_market_leader"
+                        ? "text-cyan-400 bg-cyan-500/10"
+                        : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/20"
+                    }`}
+                  >
+                    🔥 시장 주도 수급주 (Step 0)
+                  </button>
+                  <button
                     onClick={() => handleSelectStrategy("ud_dividend")}
                     className={`w-full text-left px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
                       selectedStrategyId === "ud_dividend"

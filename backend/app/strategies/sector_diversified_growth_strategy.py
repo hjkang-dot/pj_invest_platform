@@ -29,6 +29,25 @@ def get_naver_sector_with_cache(stock_code: str) -> str:
     _sector_cache[stock_code] = "기타"
     return "기타"
 
+def _build_db_sector_map(stocks: pd.DataFrame) -> dict:
+    """Build a sector lookup from the stocks DataFrame (DB sector column)."""
+    sector_map = {}
+    if "sector" in stocks.columns:
+        for _, row in stocks.iterrows():
+            code = str(row.get("stock_code", ""))
+            sector = str(row.get("sector", "")).strip()
+            if code and sector and sector not in ("", "nan", "None"):
+                sector_map[code] = sector
+    return sector_map
+
+def get_sector(stock_code: str, db_sector_map: dict) -> str:
+    """Get sector from DB first, fall back to Naver scraping if missing."""
+    if stock_code in db_sector_map:
+        sector = db_sector_map[stock_code]
+        _sector_cache[stock_code] = sector
+        return sector
+    return get_naver_sector_with_cache(stock_code)
+
 def screen_sector_diversified_growth_stocks(
     financial_statements: pd.DataFrame,
     dividends: pd.DataFrame,
@@ -63,7 +82,10 @@ def screen_sector_diversified_growth_stocks(
         ascending=[False, False, False]
     ).reset_index(drop=True)
     
-    # 3. Select at most 5 unique-sector stocks with score >= minimum_total_score
+    # 3. Build DB sector map to avoid unnecessary HTTP requests
+    db_sector_map = _build_db_sector_map(stocks)
+    
+    # 4. Select at most 5 unique-sector stocks with score >= minimum_total_score
     selected_codes = []
     selected_sectors = set()
     
@@ -78,12 +100,12 @@ def screen_sector_diversified_growth_stocks(
         if score < minimum_total_score:
             break
             
-        sector = get_naver_sector_with_cache(code)
+        sector = get_sector(code, db_sector_map)
         if sector not in selected_sectors:
             selected_codes.append(code)
             selected_sectors.add(sector)
             
-    # 4. Set is_candidate for only the selected codes
+    # 5. Set is_candidate for only the selected codes
     base_df["is_candidate"] = base_df["stock_code"].isin(selected_codes)
     
     return (
@@ -94,3 +116,4 @@ def screen_sector_diversified_growth_stocks(
         )
         .reset_index(drop=True)
     )
+

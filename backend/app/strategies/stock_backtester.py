@@ -233,8 +233,11 @@ def run_stock_backtest(strategy_id: str):
                         "amount": float(pos_val)
                     })
             
-            # Distribute capital equally to 5 portfolio slots (each representing 20% weight)
-            # If there are fewer than 5 target stocks, the remainder of the capital stays in cash.
+            # === Full-liquidation rebalancing model ===
+            # We assume all current holdings are liquidated at current prices (no slippage/fees),
+            # then the total portfolio value is redistributed equally across 5 fixed slots (20% each).
+            # If fewer than 5 stocks qualify, the remaining slots stay in cash.
+            # NOTE: This is a simplified model — real-world execution would incur transaction costs.
             capital = current_portfolio_value
             target_val_per_stock = current_portfolio_value / 5
             
