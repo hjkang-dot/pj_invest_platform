@@ -134,9 +134,12 @@ class KISAutoTrader:
                 send_telegram_message(f"<b>[ℹ️ 09:00 매수 보류]</b> 현재 보유 포지션이 5개 슬롯 한도에 도달하여 신규 매수를 건너뜁니다.")
                 return
 
-            if deposit < self.slot_size:
-                send_telegram_message(f"<b>[⚠️ 09:00 매수 보류]</b> 예수금 잔고({int(deposit):,}원)가 최소 1회 매수금(200만 원)보다 부족합니다.")
+            if deposit < 100000:
+                send_telegram_message(f"<b>[⚠️ 09:00 매수 보류]</b> 예수금 잔고({int(deposit):,}원)가 최소 주문 금액(10만 원)보다 부족합니다.")
                 return
+
+            # 동적 비중 산정: 남은 예수금 95% 범위를 남은 슬롯 수로 분할 (최대 200만 원 한도)
+            dynamic_slot_size = max(100000.0, min((deposit * 0.95) / available_slots, 2000000.0))
 
             candidates_to_buy = self.pending_buy_candidates[:available_slots]
 
@@ -151,9 +154,9 @@ class KISAutoTrader:
 
                 try:
                     # Place Market Price Buy Order (ORD_DVSN: "01")
-                    # Estimate quantity = 2,000,000 / entry_price
+                    # Estimate quantity = dynamic_slot_size / entry_price
                     est_price = float(cand.get("entry_price", 10000))
-                    qty = max(1, int(self.slot_size / est_price)) if est_price > 0 else 1
+                    qty = max(1, int(dynamic_slot_size / est_price)) if est_price > 0 else 1
 
                     res = client.order_cash(
                         stock_code=code,

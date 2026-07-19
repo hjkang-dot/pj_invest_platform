@@ -2,11 +2,14 @@ import React from "react";
 import { 
   ArrowLeft, 
   BarChart3, 
-  Sliders, 
   Layers, 
   Info,
   Search,
-  Clock
+  Clock,
+  Workflow,
+  ShieldCheck,
+  TrendingUp,
+  Zap
 } from "lucide-react";
 import type { Transaction } from "./TransactionEntry";
 
@@ -133,11 +136,7 @@ export const StrategyDetailContent: React.FC<StrategyDetailProps> = ({
             { name: "배당 유지/상승 기간", value: "최근 3년 연속 유지/증가" },
             { name: "PBR & PER 필터", value: "PBR 1.0 이하, PER 10 이하" }
           ],
-          positions: [
-            { name: "SK텔레콤", code: "017670", entryPrice: "51,200", currentPrice: "52,400", qty: "100", pnl: "+120,000", pnlPct: "+2.3%" },
-            { name: "KT&G", code: "033780", entryPrice: "92,500", currentPrice: "94,800", qty: "50", pnl: "+115,000", pnlPct: "+2.4%" },
-            { name: "기업은행", code: "024110", entryPrice: "13,800", currentPrice: "14,200", qty: "300", pnl: "+120,050", pnlPct: "+2.8%" }
-          ],
+          positions: [] as any[],
           chartPath: "M10 80 Q30 75, 50 68 T90 55 T130 50 T170 38 T210 25 T250 18 T290 8"
         };
       case "op_growth":
@@ -163,10 +162,7 @@ export const StrategyDetailContent: React.FC<StrategyDetailProps> = ({
             { name: "부채비율", value: "100% 이하" },
             { name: "영업이익 성장률", value: "전년 대비 15% 이상" }
           ],
-          positions: [
-            { name: "SK하이닉스", code: "000660", entryPrice: "178,000", currentPrice: "182,500", qty: "30", pnl: "+135,000", pnlPct: "+2.5%" },
-            { name: "한미반도체", code: "022270", entryPrice: "142,000", currentPrice: "148,600", qty: "40", pnl: "+264,000", pnlPct: "+4.6%" }
-          ],
+          positions: [] as any[],
           chartPath: "M10 80 Q30 78, 50 72 T90 62 T130 52 T170 45 T210 32 T250 15 T290 -5"
         };
       case "sector_growth":
@@ -218,9 +214,7 @@ export const StrategyDetailContent: React.FC<StrategyDetailProps> = ({
             { name: "기회 감지 알림", value: "Deep Value 시그널 즉시 발생" },
             { name: "분할 매수 및 손절", value: "3차 분할 매수, 손절 -5%" }
           ],
-          positions: [
-            { name: "금 선물 (GC=F)", code: "GOLD_FUT", entryPrice: "$2,320.00", currentPrice: "$2,310.50", qty: "10", pnl: "-$95.00", pnlPct: "-0.41%" }
-          ],
+          positions: [] as any[],
           chartPath: "M10 80 Q30 85, 50 82 T90 70 T130 75 T170 58 T210 65 T250 42 T290 20"
         };
       case "vol_climax":
@@ -755,7 +749,7 @@ export const StrategyDetailContent: React.FC<StrategyDetailProps> = ({
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-5 pb-4 border-b border-slate-900">
               <h3 className="text-xs font-bold text-slate-200 flex items-center gap-2">
                 <Layers size={14} className="text-cyan-400" />
-                {isQuantStrategy ? "실시간 추천 스크리닝 종목" : "현재 진입 자산"}
+                {isQuantStrategy ? "진입 예정 종목 (Step 0 주도주 스크리닝)" : "현재 진입 자산"}
               </h3>
               
               <div className="relative w-full sm:w-60">
@@ -911,34 +905,93 @@ export const StrategyDetailContent: React.FC<StrategyDetailProps> = ({
             </div>
           </div>
 
-          {/* Strategy Parameters (Rules List) */}
-          <div className="lg:col-span-1 bg-slate-900/30 backdrop-blur-xl border border-slate-900 p-6 rounded-2xl flex flex-col">
+          {/* Strategy Logic Flow Diagram Card */}
+          <div className="lg:col-span-1 bg-slate-900/30 backdrop-blur-xl border border-slate-900 p-6 rounded-2xl flex flex-col justify-between shadow-xl">
             <div className="flex items-center justify-between mb-4 border-b border-slate-800/60 pb-3">
               <div className="flex items-center gap-2">
-                <Sliders size={14} className="text-cyan-400" />
-                <h3 className="text-xs font-bold text-slate-200">가동 규칙 설정 파라미터</h3>
+                <Workflow size={16} className="text-cyan-400" />
+                <h3 className="text-xs font-bold text-slate-200">봇 자동 매매 전략 로직 다이어그램</h3>
               </div>
-              <button className="px-2 py-0.5 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 text-[10px] font-bold rounded border border-cyan-500/20 cursor-pointer">
-                값 변경
-              </button>
+              <span className="text-[10px] text-cyan-400 font-mono font-bold bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/20">
+                알고리즘 플로우
+              </span>
             </div>
 
-            <div className="divide-y divide-slate-800/40">
-              {data.rules.map((rule, idx) => (
-                <div key={idx} className="py-3 flex justify-between items-center gap-2 text-xs">
-                  <span className="font-semibold text-slate-300 flex items-center gap-1.5">
-                    <span className="w-1 h-1 bg-cyan-500 rounded-full"></span>
-                    {rule.name}
-                  </span>
-                  <span className="font-bold text-slate-400 font-mono bg-slate-950/40 px-2 py-0.5 rounded border border-slate-900 text-right">
-                    {rule.value}
-                  </span>
+            <div className="space-y-4 my-auto">
+              {/* Step 0 */}
+              <div className="relative pl-6 pb-2 border-l-2 border-cyan-500/40">
+                <div className="absolute -left-[9px] top-0.5 w-4 h-4 rounded-full bg-slate-950 border-2 border-cyan-400 flex items-center justify-center">
+                  <span className="w-1.5 h-1.5 bg-cyan-400 rounded-full"></span>
                 </div>
-              ))}
+                <div className="bg-slate-950/70 p-3 rounded-xl border border-slate-800 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-extrabold text-cyan-300 flex items-center gap-1">
+                      <span>1️⃣</span> Step 0: 주도주 탐색
+                    </span>
+                    <span className="text-[9px] bg-cyan-500/10 text-cyan-400 px-1.5 py-0.2 rounded font-mono font-bold">진입 예정 종목</span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 leading-snug font-medium">
+                    · 당일 거래대금 1,000억+ & 지수 대비 +3.0%p 이상 폭발 주도주 탐색<br/>
+                    · 20일 평균 대비 거래량 1.5배 이상 스파이크 조건 검증
+                  </p>
+                </div>
+              </div>
+
+              {/* Step 1 */}
+              <div className="relative pl-6 pb-2 border-l-2 border-emerald-500/40">
+                <div className="absolute -left-[9px] top-0.5 w-4 h-4 rounded-full bg-slate-950 border-2 border-emerald-400 flex items-center justify-center">
+                  <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full"></span>
+                </div>
+                <div className="bg-slate-950/70 p-3 rounded-xl border border-slate-800 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-extrabold text-emerald-300 flex items-center gap-1">
+                      <span>2️⃣</span> Step 1: 시초가 자동 매수
+                    </span>
+                    <span className="text-[9px] bg-emerald-500/10 text-emerald-400 px-1.5 py-0.2 rounded font-mono font-bold">09:00:10 체결</span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 leading-snug font-medium">
+                    · 5일선 / 20일선 정배열 가격 지지 확인<br/>
+                    · 조정일 거래량 35% 이하 급감(Dry-up) 양봉 지지 시 09:00:10 시초가 200만 원 자동 체결
+                  </p>
+                </div>
+              </div>
+
+              {/* Step 3: Exit Rules */}
+              <div className="relative pl-6">
+                <div className="absolute -left-[9px] top-0.5 w-4 h-4 rounded-full bg-slate-950 border-2 border-purple-400 flex items-center justify-center">
+                  <span className="w-1.5 h-1.5 bg-purple-400 rounded-full"></span>
+                </div>
+                <div className="bg-slate-950/70 p-3 rounded-xl border border-slate-800 space-y-2">
+                  <span className="text-xs font-extrabold text-purple-300 flex items-center gap-1">
+                    <span>3️⃣</span> 청산 및 손익 관리 (Exit)
+                  </span>
+                  <div className="space-y-1.5 text-[11px] font-medium">
+                    <div className="flex items-center justify-between bg-slate-900/80 p-2 rounded border border-slate-850">
+                      <span className="text-emerald-400 font-bold flex items-center gap-1">
+                        <ShieldCheck size={13}/> +3.0% 반등 달성
+                      </span>
+                      <span className="text-slate-300 text-[10px] font-semibold">손절가 본절(0.0%) 즉시 상향</span>
+                    </div>
+                    <div className="flex items-center justify-between bg-slate-900/80 p-2 rounded border border-slate-850">
+                      <span className="text-cyan-400 font-bold flex items-center gap-1">
+                        <TrendingUp size={13}/> 고점 대비 -1.5%
+                      </span>
+                      <span className="text-slate-300 text-[10px] font-semibold">트레일링 스톱 이익 확정</span>
+                    </div>
+                    <div className="flex items-center justify-between bg-slate-900/80 p-2 rounded border border-slate-850">
+                      <span className="text-rose-400 font-bold flex items-center gap-1">
+                        <Zap size={13}/> -4.0% 손절 이탈
+                      </span>
+                      <span className="text-slate-300 text-[10px] font-semibold">손절선 즉시 자동 매도</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
         </div>
+      </div>
       ) : (
         /* SCREEN 2: BACKTEST STATISTICS & PLOT & TRANSACTION LOG */
         <div className="space-y-6">
@@ -1149,162 +1202,7 @@ export const StrategyDetailContent: React.FC<StrategyDetailProps> = ({
         </div>
       )}
 
-      {/* ACTIVE HOLDINGS & TRADE HISTORY & LIVE TERMINAL LOG (For Market Leader Strategy) */}
-      {strategyId === "step0_market_leader" && (
-        <div className="space-y-6 mt-8">
-          {/* SECTION 1: Active 5-Slot Portfolio Holdings */}
-          <div className="bg-slate-900/30 backdrop-blur-xl border border-cyan-500/30 p-6 rounded-2xl shadow-xl">
-            <div className="flex items-center justify-between mb-4 border-b border-slate-800/60 pb-3">
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 bg-emerald-400 rounded-full animate-ping"></span>
-                <h3 className="text-sm font-extrabold text-slate-100">🤖 현재 자동 매매 봇 보유 종목 (5슬롯 포트폴리오)</h3>
-              </div>
-              <span className="text-[10px] text-emerald-400 font-mono font-bold bg-emerald-500/10 px-2.5 py-1 rounded-lg border border-emerald-500/20">
-                실시간 5초 간격 시세 감시 중
-              </span>
-            </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {botDashboard.activePositions && botDashboard.activePositions.length > 0 ? (
-                botDashboard.activePositions.map((pos: any, idx: number) => {
-                  const gain = pos.gain_pct || 0;
-                  const isPositive = gain >= 0;
-                  return (
-                    <div key={idx} className="bg-slate-950/80 border border-slate-800 p-4 rounded-xl flex flex-col justify-between space-y-3 hover:border-cyan-500/30 transition shadow-md">
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-extrabold text-slate-100">{pos.name}</span>
-                            <span className="text-[10px] text-slate-500 font-mono">({pos.code})</span>
-                          </div>
-                          <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded mt-1 inline-block border border-emerald-500/20">
-                            {pos.status || (pos.trailing_raised ? "🛡️ 본절 방어선 가동 중" : "감시 중")}
-                          </span>
-                        </div>
-                        <div className="text-right">
-                          <span className={`text-base font-black font-mono block ${isPositive ? "text-emerald-400" : "text-rose-400"}`}>
-                            {gain >= 0 ? `+${gain.toFixed(2)}%` : `${gain.toFixed(2)}%`}
-                          </span>
-                          <span className="text-[10px] text-slate-400 font-mono">{pos.pnl_krw ? `${pos.pnl_krw > 0 ? '+' : ''}${pos.pnl_krw.toLocaleString()}원` : ''}</span>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-900 text-[11px] font-mono">
-                        <div>
-                          <span className="text-[9px] text-slate-500 block">매수가</span>
-                          <span className="text-slate-300 font-semibold">{pos.entry_price?.toLocaleString()}원</span>
-                        </div>
-                        <div>
-                          <span className="text-[9px] text-slate-500 block">현재가</span>
-                          <span className="text-slate-200 font-semibold">{pos.current_price?.toLocaleString()}원</span>
-                        </div>
-                        <div>
-                          <span className="text-[9px] text-slate-500 block">보유수량</span>
-                          <span className="text-cyan-400 font-semibold">{pos.qty}주</span>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })
-              ) : (
-                <div className="col-span-2 text-center py-8 text-slate-500 text-xs font-semibold">
-                  현재 체결되어 보유 중인 포지션이 없습니다. (09:00:10 시초가 자동 매수 대기 중)
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* SECTION 2: Trade History Table */}
-          <div className="bg-slate-900/30 backdrop-blur-xl border border-slate-900 p-6 rounded-2xl shadow-xl">
-            <div className="flex items-center justify-between mb-4 border-b border-slate-800/60 pb-3">
-              <h3 className="text-sm font-extrabold text-slate-100 flex items-center gap-2">
-                <span>📜</span> 최근 체결된 자동 매매 거래 내역
-              </h3>
-              <span className="text-[10px] text-slate-400 font-mono">총 {botDashboard.tradeHistory?.length || 0}건 기록됨</span>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-[11px]">
-                <thead>
-                  <tr className="border-b border-slate-800 text-slate-400 font-semibold">
-                    <th className="py-2.5 px-3">매수일/매도일</th>
-                    <th className="py-2.5 px-3">종목명 (코드)</th>
-                    <th className="py-2.5 px-3 text-right">매수가</th>
-                    <th className="py-2.5 px-3 text-right">청산가</th>
-                    <th className="py-2.5 px-3 text-right">실현 손익금</th>
-                    <th className="py-2.5 px-3 text-right">최종 수익률</th>
-                    <th className="py-2.5 px-3 text-center">청산 사유</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800/40">
-                  {botDashboard.tradeHistory && botDashboard.tradeHistory.length > 0 ? (
-                    botDashboard.tradeHistory.map((tr: any, idx: number) => {
-                      const isProfit = tr.return_pct >= 0;
-                      return (
-                        <tr key={idx} className="hover:bg-slate-900/40 transition">
-                          <td className="py-2.5 px-3 font-mono text-slate-400">{tr.entry_date} ~ {tr.exit_date}</td>
-                          <td className="py-2.5 px-3 font-bold text-slate-200">
-                            {tr.name} <span className="text-[9px] text-slate-500 font-mono">({tr.code})</span>
-                          </td>
-                          <td className="py-2.5 px-3 text-right font-mono text-slate-300">{tr.entry_price?.toLocaleString()}원</td>
-                          <td className="py-2.5 px-3 text-right font-mono text-slate-200">{tr.exit_price?.toLocaleString()}원</td>
-                          <td className={`py-2.5 px-3 text-right font-mono font-bold ${isProfit ? "text-emerald-400" : "text-rose-400"}`}>
-                            {tr.pnl_krw > 0 ? `+${tr.pnl_krw.toLocaleString()}` : tr.pnl_krw.toLocaleString()} 원
-                          </td>
-                          <td className={`py-2.5 px-3 text-right font-mono font-black ${isProfit ? "text-emerald-400" : "text-rose-400"}`}>
-                            {tr.return_pct > 0 ? `+${tr.return_pct.toFixed(2)}%` : `${tr.return_pct.toFixed(2)}%`}
-                          </td>
-                          <td className="py-2.5 px-3 text-center">
-                            <span className={`text-[9px] font-bold px-2 py-0.5 rounded border ${
-                              isProfit ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/20" : "bg-rose-500/10 text-rose-300 border-rose-500/20"
-                            }`}>
-                              {tr.exit_reason}
-                            </span>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  ) : (
-                    <tr>
-                      <td colSpan={7} className="py-8 text-center text-slate-500 text-xs font-semibold">
-                        아직 체결된 청산 내역이 없습니다.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* SECTION 3: Live Terminal Console Log Panel */}
-          <div className="bg-slate-950 border border-slate-800 p-5 rounded-2xl shadow-2xl font-mono text-xs space-y-3">
-            <div className="flex items-center justify-between border-b border-slate-900 pb-2.5">
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-pulse"></span>
-                <span className="w-2.5 h-2.5 bg-amber-500 rounded-full"></span>
-                <span className="w-2.5 h-2.5 bg-rose-500 rounded-full"></span>
-                <h4 className="text-xs font-extrabold text-slate-200 ml-2">💻 KIS 자동 매매 실시간 터미널 실행 로그</h4>
-              </div>
-              <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">Auto-refresh (5s)</span>
-            </div>
-
-            <div className="h-44 overflow-y-auto space-y-1.5 text-[11px] text-slate-300 pr-2 scrollbar-thin scrollbar-thumb-slate-800">
-              {botDashboard.logs && botDashboard.logs.length > 0 ? (
-                botDashboard.logs.map((logStr: string, idx: number) => (
-                  <div key={idx} className="flex items-start gap-2">
-                    <span className="text-cyan-500 font-bold select-none">&gt;</span>
-                    <span className={logStr.includes("Buy") ? "text-emerald-400 font-semibold" : logStr.includes("Trailing") ? "text-sky-300 font-semibold" : logStr.includes("Telegram") ? "text-amber-300" : "text-slate-300"}>
-                      {logStr}
-                    </span>
-                  </div>
-                ))
-              ) : (
-                <div className="text-slate-600 text-center py-6">로그 데이터를 수신하는 중...</div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* KIS STOCK ORDER MODAL POPUP */}
       {orderModalOpen && orderStock && (

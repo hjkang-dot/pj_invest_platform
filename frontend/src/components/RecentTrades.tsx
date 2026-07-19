@@ -19,13 +19,7 @@ interface RecentTradesProps {
 }
 
 export const RecentTrades: React.FC<RecentTradesProps> = ({ trades }) => {
-  const mockTrades = trades !== undefined ? trades : [
-    { id: "1", time: "2026-06-22 21:00:03", strategy: "VolumeClimaxFlip", asset: "BTC_USDT", type: "BUY", price: 65140, quantity: 0.15, isLive: false },
-    { id: "2", time: "2026-06-22 15:30:15", strategy: "VolumeClimaxFlip", asset: "삼성전자", type: "SELL", price: 75200, quantity: 50, pnl: 160000, pnlPct: 4.4, isLive: false },
-    { id: "3", time: "2026-06-19 21:00:10", strategy: "VolumeClimaxFlip", asset: "ETH_USDT", type: "SELL", price: 3420, quantity: 1.2, pnl: -64, pnlPct: -1.5, isLive: false },
-    { id: "4", time: "2026-06-19 15:00:05", strategy: "VolumeClimaxFlip", asset: "SK하이닉스", type: "BUY", price: 178000, quantity: 20, isLive: false },
-    { id: "5", time: "2026-06-18 21:00:02", strategy: "VolumeClimaxFlip", asset: "BTC_USDT", type: "SELL", price: 64280, quantity: 0.25, pnl: 450, pnlPct: 2.8, isLive: false },
-  ] as TradeItem[];
+  const displayTrades = trades || [];
 
   const formatPrice = (val: number, asset: string) => {
     if (asset.includes("_")) {
@@ -68,33 +62,41 @@ export const RecentTrades: React.FC<RecentTradesProps> = ({ trades }) => {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800/50 text-slate-300 font-medium">
-            {mockTrades.map(trade => (
-              <tr key={trade.id} className="hover:bg-slate-800/5 transition">
-                <td className="py-3 px-3 text-slate-500 font-mono">{trade.time}</td>
-                <td className="py-3 px-3 font-semibold text-slate-200">{trade.asset}</td>
-                <td className="py-3 px-3 text-slate-400">{trade.strategy}</td>
-                <td className="py-3 px-3">
-                  <span className={`inline-flex items-center gap-0.5 font-bold ${
-                    trade.type === "BUY" ? "text-emerald-400" : "text-rose-400"
-                  }`}>
-                    {trade.type === "BUY" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
-                    {trade.type === "BUY" ? "매수" : "매도"}
-                  </span>
-                </td>
-                <td className="py-3 px-3 font-mono">{formatPrice(trade.price, trade.asset)}</td>
-                <td className="py-3 px-3 text-right font-mono">{trade.quantity.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
-                <td className="py-3 px-3 text-right font-mono">{formatPnL(trade.pnl, trade.pnlPct, trade.asset)}</td>
-                <td className="py-3 px-3 text-center">
-                  <span className={`inline-flex px-1.5 py-0.2 rounded text-[9px] font-bold ${
-                    trade.isLive 
-                      ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" 
-                      : "bg-slate-700/20 text-slate-400 border border-slate-700/30"
-                  }`}>
-                    {trade.isLive ? "실거래" : "모의투자"}
-                  </span>
+            {displayTrades.length > 0 ? (
+              displayTrades.map(trade => (
+                <tr key={trade.id} className="hover:bg-slate-800/5 transition">
+                  <td className="py-3 px-3 text-slate-500 font-mono">{trade.time}</td>
+                  <td className="py-3 px-3 font-semibold text-slate-200">{trade.asset}</td>
+                  <td className="py-3 px-3 text-slate-400">{trade.strategy}</td>
+                  <td className="py-3 px-3">
+                    <span className={`inline-flex items-center gap-0.5 font-bold ${
+                      trade.type === "BUY" ? "text-emerald-400" : "text-rose-400"
+                    }`}>
+                      {trade.type === "BUY" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
+                      {trade.type === "BUY" ? "매수" : "매도"}
+                    </span>
+                  </td>
+                  <td className="py-3 px-3 font-mono">{formatPrice(trade.price, trade.asset)}</td>
+                  <td className="py-3 px-3 text-right font-mono">{trade.quantity.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
+                  <td className="py-3 px-3 text-right font-mono">{formatPnL(trade.pnl, trade.pnlPct, trade.asset)}</td>
+                  <td className="py-3 px-3 text-center">
+                    <span className={`inline-flex px-1.5 py-0.2 rounded text-[9px] font-bold ${
+                      trade.isLive 
+                        ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" 
+                        : "bg-slate-700/20 text-slate-400 border border-slate-700/30"
+                    }`}>
+                      {trade.isLive ? "실거래" : "모의투자"}
+                    </span>
+                  </td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan={8} className="py-8 text-center text-slate-500 text-xs font-semibold">
+                  최근 체결된 거래 내역이 없습니다.
                 </td>
               </tr>
-            ))}
+            )}
           </tbody>
         </table>
       </div>

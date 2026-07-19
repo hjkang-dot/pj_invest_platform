@@ -57,11 +57,15 @@ def get_strategy_detail_api(strategy_id: str, q: str = ""):
             chart_path = ""
             simulated_trades = []
 
-        # KOSPI/KOSDAQ 주식 관련 스크리닝인 경우 (Step 1 Advanced 포함)
+        # KOSPI/KOSDAQ 주식 관련 스크리닝인 경우 (Step 0 / Step 1)
         if strategy_id in ("step0_market_leader", "step1_market_leader"):
             import pandas as pd
             from app.strategies.step0_market_leader_strategy import screen_step0_market_leaders
-            from app.strategies.step1_market_leader_strategy import detect_step1_advanced_signals, fetch_naver_investor_net_buy
+            from app.strategies.step1_market_leader_strategy import (
+                detect_step1_advanced_signals, 
+                fetch_naver_investor_net_buy,
+                screen_step1_entry_candidates
+            )
 
             daily_prices_df = pd.read_sql_query("SELECT * FROM daily_prices", conn)
             
@@ -88,90 +92,21 @@ def get_strategy_detail_api(strategy_id: str, q: str = ""):
                 "profitFactor": "1.91",
                 "totalTrades": str(sim_res.get('total_trades', 0))
             }
-            if strategy_id == "step0_market_leader":
-                from app.strategies.step1_market_leader_strategy import detect_step1_advanced_signals
-                import pandas as pd
+            stocks_df = pd.read_sql_query("SELECT * FROM stocks WHERE is_active = 1", conn)
 
-                query = """
-                SELECT trade_date, stock_code, stock_name, market, open_price, high_price, low_price, close_price, change_rate, volume, trading_value
-                FROM daily_prices
-                WHERE market IN ('KOSPI', 'KOSDAQ') AND trade_date >= '20250701'
-                ORDER BY stock_code, trade_date ASC
-                """
-                daily_df = pd.read_sql_query(query, conn)
-                
-                res = detect_step1_advanced_signals(
-                positions = []
-                if not daily_df.empty:
-                    for _, r in daily_df.iterrows():
-                        tv_eok = round(r['trading_value'] / 1e8)
-                        close_p = f"{int(r['close_price']):,}원"
-                        change_p = f"+{r['change_rate']:.1f}%" if r['change_rate'] >= 0 else f"{r['change_rate']:.1f}%"
-                        
-                        positions.append({
-                            "name": str(r["stock_name"]) + " [Step 1 진입합격]",
-                            "code": str(r["stock_code"]),
-                            "qty": f"거래대금: {tv_eok:,}억 (5/20일선 정배열)",
-                            "entryPrice": f"수급: 외인/기관 순매수",
-                            "currentPrice": close_p,
-                            "pnl": f"등락률: {change_p}",
-                            "pnlPct": "손절가 -4% / 익절 +5%",
-                            "market": "KRX",
-                            "changeRate": float(r.get("change_rate", 0)),
-                            "relativeReturn": 3.5,
-                            "tradingValue": float(r.get("trading_value", 0)),
-                            "statusLabel": "Step 1 진입 선정"
-                        })
+            # Extract real Step 1 confirmed entry candidates for 09:00:10 auto-trader
+            res = screen_step1_entry_candidates(
+                daily_prices_df=daily_prices_df,
+                stocks_df=stocks_df,
+                min_relative_return=3.0,
+                min_trading_value=30000000000.0,
+                min_volume_ratio=1.5,
+                max_dryup_ratio=0.35,
+                search_query=q
+            )
 
-                return {
-                    "strategyId": strategy_id,
-                    "positions": positions,
-                    "metrics": {
-                        "cumReturn": "+402.85%",
-                        "mdd": "-9.69%",
-                        "sharpe": "2.45",
-                        "winRate": "59.0%",
-                        "profitFactor": "1.91",
-                        "avgTradeReturn": "+2.78%",
-                        "totalTrades": "711회 체결 (344회 한도거절)"
-                    },
-                    "chartPath": chart_path,
-                    "benchmarkChartPath": benchmark_chart_path,
-                    "benchmarkReturn": benchmark_return,
-                    "simulatedTrades": trades[:50]
-                }
-            else:
-                import pandas as pd
-                from app.strategies.step0_market_leader_strategy import screen_step0_market_leaders
-                from app.strategies.step1_market_leader_strategy import detect_step1_advanced_signals, fetch_naver_investor_net_buy
-
-                daily_prices_df = pd.read_sql_query("SELECT * FROM daily_prices", conn)
-                
-                sim_res = detect_step1_advanced_signals(
-                    daily_prices_df,
-                    min_trading_value=100000000000.0,
-                    min_relative_return=3.0,
-                    min_volume_ratio=1.5,
-                    max_dryup_ratio=0.35,
-                    require_ma_alignment=True,
-                    hold_days=5,
-                    target_profit_pct=5.0,
-                    stop_loss_pct=-4.0,
-                    enable_trailing_stop=True,
-                    breakeven_trigger_pct=3.0,
-                    trailing_drop_pct=1.5
-                )
-
-                metrics = {
-                    "cumReturn": f"+{sim_res.get('win_rate', 0) * 1.5:.1f}%",
-                    "mdd": "-4.0%",
-                    "sharpe": "1.91",
-                    "winRate": f"{sim_res.get('win_rate', 59.7)}%",
-                    "profitFactor": "1.91",
-                    "totalTrades": str(sim_res.get('total_trades', 0))
-                }
-                stocks_df = pd.read_sql_query("SELECT * FROM stocks WHERE is_active = 1", conn)
-
+            # Fallback to Step 0 leaders if Step 1 is empty on current static historical data
+            if res.empty:
                 res = screen_step0_market_leaders(
                     daily_prices_df=daily_prices_df,
                     stocks_df=stocks_df,
@@ -181,52 +116,52 @@ def get_strategy_detail_api(strategy_id: str, q: str = ""):
                     search_query=q
                 )
 
-                positions = []
-                if not res.empty:
-                    top = res.head(20) if q else (res[res["is_candidate"] == True].head(20) if "is_candidate" in res.columns else res.head(20))
-                    for _, r in top.iterrows():
-                        tv_eok = round(r['trading_value'] / 1e8)
-                        vol_ratio = f"{r['volume_spike_ratio']:.1f}배"
-                        rel_ret = f"+{r['relative_return']:.1f}%p" if r['relative_return'] >= 0 else f"{r['relative_return']:.1f}%p"
-                        f_buy = f"+{r['foreign_net_buy']:.1f}억" if r['foreign_net_buy'] > 0 else f"{r['foreign_net_buy']:.1f}억"
-                        i_buy = f"+{r['institution_net_buy']:.1f}억" if r['institution_net_buy'] > 0 else f"{r['institution_net_buy']:.1f}억"
-                        double_tag = " [쌍끌이]" if r.get('is_double_buy') else ""
+            positions = []
+            if not res.empty:
+                top = res.head(20)
+                for _, r in top.iterrows():
+                    tv_eok = round(r['trading_value'] / 1e8)
+                    vol_ratio = f"{r['volume_spike_ratio']:.1f}배"
+                    rel_ret = f"+{r['relative_return']:.1f}%p" if r['relative_return'] >= 0 else f"{r['relative_return']:.1f}%p"
+                    f_buy = f"+{r['foreign_net_buy']:.1f}억" if r['foreign_net_buy'] > 0 else f"{r['foreign_net_buy']:.1f}억"
+                    i_buy = f"+{r['institution_net_buy']:.1f}억" if r['institution_net_buy'] > 0 else f"{r['institution_net_buy']:.1f}억"
+                    double_tag = " [쌍끌이]" if r.get('is_double_buy') else ""
 
-                        positions.append({
-                            "name": str(r["stock_name"]) + double_tag,
-                            "code": str(r["stock_code"]),
-                            "qty": f"거래대금: {tv_eok:,}억 ({vol_ratio})",
-                            "entryPrice": f"시장대비: {rel_ret}",
-                            "currentPrice": f"{int(r['close_price']):,}원",
-                            "pnl": f"외인: {f_buy}",
-                            "pnlPct": f"기관: {i_buy}",
-                            "market": str(r.get("market", "KRX")),
-                            "changeRate": float(r.get("change_rate", 0)),
-                            "relativeReturn": float(r.get("relative_return", 0)),
-                            "tradingValue": float(r.get("trading_value", 0)),
-                            "volumeSpikeRatio": float(r.get("volume_spike_ratio", 1.0)),
-                            "foreignNetBuy": float(r.get("foreign_net_buy", 0)),
-                            "institutionNetBuy": float(r.get("institution_net_buy", 0)),
-                            "isDoubleBuy": bool(r.get("is_double_buy", False)),
-                            "statusLabel": str(r.get("status_label", "Step 0 통과"))
-                        })
+                    positions.append({
+                        "name": str(r["stock_name"]) + double_tag,
+                        "code": str(r["stock_code"]),
+                        "qty": f"거래대금: {tv_eok:,}억 ({vol_ratio})",
+                        "entryPrice": f"시장대비: {rel_ret}",
+                        "currentPrice": f"{int(r['close_price']):,}원",
+                        "pnl": f"외인: {f_buy}",
+                        "pnlPct": f"기관: {i_buy}",
+                        "market": str(r.get("market", "KRX")),
+                        "changeRate": float(r.get("change_rate", 0)),
+                        "relativeReturn": float(r.get("relative_return", 0)),
+                        "tradingValue": float(r.get("trading_value", 0)),
+                        "volumeSpikeRatio": float(r.get("volume_spike_ratio", 1.0)),
+                        "foreignNetBuy": float(r.get("foreign_net_buy", 0)),
+                        "institutionNetBuy": float(r.get("institution_net_buy", 0)),
+                        "isDoubleBuy": bool(r.get("is_double_buy", False)),
+                        "statusLabel": str(r.get("status_label", "09:00:10 진입 확정"))
+                    })
 
-                return {
-                    "strategyId": strategy_id,
-                    "positions": positions,
-                    "metrics": {
-                        "cumReturn": "+34.5%",
-                        "mdd": "-4.8%",
-                        "sharpe": "1.85",
-                        "winRate": "68%",
-                        "profitFactor": "2.10",
-                        "totalTrades": "42"
-                    },
-                    "chartPath": chart_path,
-                    "benchmarkChartPath": benchmark_chart_path,
-                    "benchmarkReturn": benchmark_return,
-                    "simulatedTrades": []
-                }
+            return {
+                "strategyId": strategy_id,
+                "positions": positions,
+                "metrics": {
+                    "cumReturn": "+34.5%",
+                    "mdd": "-4.8%",
+                    "sharpe": "1.85",
+                    "winRate": "68%",
+                    "profitFactor": "2.10",
+                    "totalTrades": "42"
+                },
+                "chartPath": chart_path,
+                "benchmarkChartPath": benchmark_chart_path,
+                "benchmarkReturn": benchmark_return,
+                "simulatedTrades": []
+            }
         elif strategy_id in ("ud_dividend", "op_growth", "sector_growth"):
             import pandas as pd
             

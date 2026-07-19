@@ -27,20 +27,8 @@ export const SignalAlerts: React.FC<SignalAlertsProps> = ({
   signals = [],
   strategies = [],
 }) => {
-  // Mock data if empty
-  const mockStrategies = strategies.length > 0 ? strategies : [
-    { name: "VolumeClimaxFlip (Coin)", type: "COIN", status: "ACTIVE", lastRun: "21:00:02" },
-    { name: "VolumeClimaxFlip (Stock)", type: "STOCK", status: "ACTIVE", lastRun: "21:00:03" },
-    { name: "Undervalued Dividend (Stock)", type: "STOCK", status: "SLEEP", lastRun: "15:45:00" },
-    { name: "Opportunity Growth (Stock)", type: "STOCK", status: "SLEEP", lastRun: "15:45:00" },
-  ] as StrategyStatus[];
-
-  const mockSignals = signals.length > 0 ? signals : [
-    { id: "1", time: "21:00:02", asset: "BTC_USDT", strategy: "VolumeClimaxFlip", signalType: "LONG", price: "$65,140", reason: "Bollinger Lower Band Rebound + Vol Climax" },
-    { id: "2", time: "21:00:03", asset: "ETH_USDT", strategy: "VolumeClimaxFlip", signalType: "SHORT", price: "$3,380", reason: "Bollinger Upper Band Touch + Vol Climax" },
-    { id: "3", time: "15:30:12", asset: "SK하이닉스", strategy: "VolumeClimaxFlip", signalType: "LONG", price: "182,500원", reason: "Lower BB Breakout with high volume" },
-    { id: "4", time: "15:30:15", asset: "삼성전자", strategy: "VolumeClimaxFlip", signalType: "EXIT", price: "75,200원", reason: "Opposite BB touch trigger" },
-  ] as SignalItem[];
+  const displayStrategies = strategies;
+  const displaySignals = signals;
 
   const getStatusColor = (status: "ACTIVE" | "SLEEP" | "ERROR") => {
     switch (status) {
@@ -74,7 +62,7 @@ export const SignalAlerts: React.FC<SignalAlertsProps> = ({
         </div>
 
         <div className="space-y-4">
-          {mockStrategies.map((strat) => (
+          {displayStrategies.map((strat) => (
             <div key={strat.name} className="flex justify-between items-center p-3 bg-slate-950/40 border border-slate-850/50 rounded-xl hover:border-slate-800 transition">
               <div>
                 <p className="text-xs font-bold text-slate-200">{strat.name}</p>
@@ -85,6 +73,11 @@ export const SignalAlerts: React.FC<SignalAlertsProps> = ({
               </span>
             </div>
           ))}
+          {displayStrategies.length === 0 && (
+            <div className="text-slate-500 text-center py-4 text-xs font-medium">
+              등록된 분석 엔진 구동 정보가 없습니다.
+            </div>
+          )}
         </div>
       </div>
 
@@ -97,7 +90,7 @@ export const SignalAlerts: React.FC<SignalAlertsProps> = ({
 
         {/* Timeline */}
         <div className="relative pl-6 border-l border-slate-800 space-y-6">
-          {mockSignals.map((sig) => (
+          {displaySignals.map((sig) => (
             <div key={sig.id} className="relative">
               {/* Timeline Bullet */}
               <span className="absolute -left-[31px] top-1 w-2.5 h-2.5 rounded-full bg-slate-900 border-2 border-cyan-400"></span>
@@ -117,8 +110,8 @@ export const SignalAlerts: React.FC<SignalAlertsProps> = ({
               </p>
             </div>
           ))}
-          {mockSignals.length === 0 && (
-            <div className="text-slate-500 text-center py-8 text-xs relative -left-6">
+          {displaySignals.length === 0 && (
+            <div className="text-slate-500 text-center py-8 text-xs relative -left-6 font-medium">
               오늘 발생한 매매 신호가 없습니다.
             </div>
           )}

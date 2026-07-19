@@ -36,18 +36,7 @@ export const LiveLogs: React.FC<LiveLogsProps> = ({ logs }) => {
   };
 
   const activeLogs = logs || (dbLogs.length > 0 ? dbLogs : [
-    "[2026-06-22 21:00:00] [SYSTEM] Starting unified daily trading batch executor...",
-    "[2026-06-22 21:00:01] [DB] Connecting to invest_platform.db...",
-    "[2026-06-22 21:00:01] [COIN] Fetching 1d candles for BTC_USDT...",
-    "[2026-06-22 21:00:02] [COIN] BTC_USDT: Close=$65,140, Signal=LONG (Vol Climax Rebound)",
-    "[2026-06-22 21:00:02] [COIN] Executing mock BUY order for BTC_USDT (Qty: 0.15, Price: 65140.0)...",
-    "[2026-06-22 21:00:02] [COIN] Order filled. Database updated.",
-    "[2026-06-22 21:00:02] [STOCK] Running KRX Daily Price Sync Pipeline for 20260622...",
-    "[2026-06-22 21:00:03] [STOCK] Sync skipped. Date 20260622 already synced in DB.",
-    "[2026-06-22 21:00:03] [STOCK] Fetching DART company financials cache...",
-    "[2026-06-22 21:00:03] [STOCK] Evaluating stock strategies on daily prices...",
-    "[2026-06-22 21:00:04] [SYSTEM] Telegram report sent successfully.",
-    "[2026-06-22 21:00:04] [SYSTEM] Unified trading batch finished successfully."
+    "[System] 실시간 통합 데이터 수집 및 거래 파이프라인 감시 중..."
   ]);
 
   return (

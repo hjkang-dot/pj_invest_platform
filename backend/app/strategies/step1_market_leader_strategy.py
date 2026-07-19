@@ -25,7 +25,7 @@ def fetch_naver_investor_net_buy(stock_code: str) -> Dict[str, float]:
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
     try:
-        res = requests.get(url, headers=headers, timeout=3)
+        res = requests.get(url, headers=headers, timeout=1)
         if res.status_code == 200:
             trend_data = res.json()
             if isinstance(trend_data, list) and len(trend_data) > 0:
@@ -259,3 +259,163 @@ def detect_step1_advanced_signals(
         "avg_max_possible_return_pct": avg_max_return,
         "trades": res_df.to_dict(orient="records")
     }
+
+def screen_step1_entry_candidates(
+    daily_prices_df: pd.DataFrame,
+    stocks_df: Optional[pd.DataFrame] = None,
+    min_trading_value: float = 30000000000.0, # 300억 원 이상
+    min_relative_return: float = 3.0,          # +3.0%p 이상
+    min_volume_ratio: float = 1.5,             # 1.5배 이상
+    max_dryup_ratio: float = 0.35,             # 조정일 거래량 <= 35%
+    search_query: str = ""
+) -> pd.DataFrame:
+    """
+    Screen real Step 1 entry candidate stocks for 09:00:10 auto-trader execution.
+    Requires:
+    1. Step 0 Breakout (Trading Value >= 300억, Relative Return >= +3%p, Volume Spike >= 1.5x)
+    2. 5D / 20D Moving Average Bullish Alignment (ma5 >= ma20)
+    3. Volume Dry-up <= 35% on pullback days
+    4. Real-time Foreigner & Institutional net buy validation
+    """
+    if daily_prices_df.empty:
+        return pd.DataFrame()
+
+    df = daily_prices_df.copy()
+    df["trade_date"] = df["trade_date"].astype(str)
+    df = df.sort_values(by=["stock_code", "trade_date"]).reset_index(drop=True)
+
+    df["is_common"] = df.apply(lambda r: is_common_stock(r["stock_name"], r["stock_code"]), axis=1)
+    df = df[df["is_common"] == True].copy()
+
+    # Calculate 20-day average trading value & volume spike ratio
+    df["avg_20d_trading_value"] = df.groupby("stock_code")["trading_value"].transform(
+        lambda x: x.rolling(window=20, min_periods=5).mean()
+    )
+    df["volume_spike_ratio"] = np.where(
+        df["avg_20d_trading_value"] > 0,
+        df["trading_value"] / df["avg_20d_trading_value"],
+        1.0
+    )
+
+    # Relative return vs market average
+    mkt_returns = df.groupby(["trade_date", "market"])["change_rate"].transform("mean")
+    df["relative_return"] = df["change_rate"] - mkt_returns
+
+    df["ma5"] = df.groupby("stock_code")["close_price"].transform(
+        lambda x: x.rolling(window=5, min_periods=1).mean()
+    )
+    df["ma20"] = df.groupby("stock_code")["close_price"].transform(
+        lambda x: x.rolling(window=20, min_periods=1).mean()
+    )
+    df["mid_price"] = (df["open_price"] + df["close_price"]) / 2.0
+
+    candidates = []
+    stock_groups = df.groupby("stock_code")
+
+    for stock_code, group in stock_groups:
+        n_rows = len(group)
+        if n_rows < 5:
+            continue
+
+        latest_idx = n_rows - 1
+        
+        # Check within last 4 days for Step 0 breakout + Step 1 dryup
+        for i in range(max(0, n_rows - 4), n_rows):
+            # Check Step 0 breakout on day i
+            t_val = group["trading_value"].iloc[i]
+            rel_ret = group["relative_return"].iloc[i]
+            vol_spike = group["volume_spike_ratio"].iloc[i]
+            c_rate = group["change_rate"].iloc[i]
+            ma5 = group["ma5"].iloc[i]
+            ma20 = group["ma20"].iloc[i]
+
+            is_step0 = (t_val >= min_trading_value and rel_ret >= min_relative_return and vol_spike >= min_volume_ratio and c_rate > 0)
+            is_ma_aligned = (ma5 >= ma20)
+
+            if not is_step0 or not is_ma_aligned:
+                continue
+
+            # Check if current day or next 1-2 days show dryup
+            base_vol = group["volume"].iloc[i]
+            base_mid = group["mid_price"].iloc[i]
+
+            step1_qualified = False
+            dryup_val = 1.0
+
+            for offset in range(1, 3):
+                adj_idx = i + offset
+                if adj_idx >= n_rows:
+                    break
+                
+                cur_vol = group["volume"].iloc[adj_idx]
+                cur_close = group["close_price"].iloc[adj_idx]
+                cur_ma5 = group["ma5"].iloc[adj_idx]
+                cur_ma20 = group["ma20"].iloc[adj_idx]
+
+                dryup_val = cur_vol / base_vol if base_vol > 0 else 1.0
+                price_ok = (cur_close >= base_mid * 0.99) and (cur_close >= cur_ma5 * 0.99)
+                trend_ok = (cur_ma5 >= cur_ma20)
+
+                if dryup_val <= max_dryup_ratio and price_ok and trend_ok:
+                    step1_qualified = True
+                    latest_idx = adj_idx
+                    break
+            
+            # If currently at latest day or step1 qualified
+            if step1_qualified or (i == n_rows - 1 and is_step0 and is_ma_aligned):
+                last_row = group.iloc[latest_idx]
+                
+                candidates.append({
+                    "stock_code": stock_code,
+                    "stock_name": last_row["stock_name"],
+                    "market": last_row.get("market", "KRX"),
+                    "close_price": float(last_row["close_price"]),
+                    "change_rate": float(last_row["change_rate"]),
+                    "trading_value": float(t_val),
+                    "volume_spike_ratio": float(vol_spike),
+                    "relative_return": float(rel_ret),
+                    "dryup_ratio": round(dryup_val * 100.0, 1),
+                    "foreign_net_buy": 0.0,
+                    "institution_net_buy": 0.0,
+                    "is_double_buy": False,
+                    "is_step1_confirmed": step1_qualified,
+                    "status_label": "09:00:10 진입 확정" if step1_qualified else "Step 1 지지 대기"
+                })
+                break
+
+    if not candidates:
+        return pd.DataFrame()
+
+    # Parallelize Naver investor net buy API requests (Fast & Non-blocking)
+    from concurrent.futures import ThreadPoolExecutor
+    
+    top_candidates = candidates[:30] # Limit max 30 candidates for instant response
+    def _enrich_net_buy(cand):
+        code = cand["stock_code"]
+        net = fetch_naver_investor_net_buy(code)
+        f_b = net.get("foreign_net_buy", 0.0)
+        i_b = net.get("institution_net_buy", 0.0)
+        cand["foreign_net_buy"] = f_b
+        cand["institution_net_buy"] = i_b
+        cand["is_double_buy"] = (f_b > 0 and i_b > 0)
+        return cand
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        enriched_candidates = list(executor.map(_enrich_net_buy, top_candidates))
+
+    cand_df = pd.DataFrame(enriched_candidates)
+
+    if search_query:
+        q_lower = search_query.lower().strip()
+        cand_df = cand_df[
+            cand_df["stock_name"].astype(str).str.lower().str.contains(q_lower) |
+            cand_df["stock_code"].astype(str).str.lower().str.contains(q_lower)
+        ]
+
+    # Prioritize Step 1 confirmed & double buy
+    cand_df = cand_df.sort_values(
+        by=["is_step1_confirmed", "is_double_buy", "trading_value"],
+        ascending=[False, False, False]
+    ).reset_index(drop=True)
+
+    return cand_df

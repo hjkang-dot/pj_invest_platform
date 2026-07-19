@@ -23,14 +23,7 @@ interface ActiveHoldingsProps {
 export const ActiveHoldings: React.FC<ActiveHoldingsProps> = ({ holdings }) => {
   const [activeTab, setActiveTab] = useState<"ALL" | "STOCK" | "COIN">("ALL");
 
-  // Mock holdings data if none provided
-  const items = holdings !== undefined ? holdings : [
-    { id: "1", code: "005930", name: "삼성전자", type: "STOCK", quantity: 150, entryPrice: 72000, currentPrice: 75200, valuation: 11280000, pnl: 480000, pnlPct: 4.4, score: 72 },
-    { id: "2", code: "000660", name: "SK하이닉스", type: "STOCK", quantity: 60, entryPrice: 178000, currentPrice: 182500, valuation: 10950000, pnl: 270000, pnlPct: 2.5, score: 68 },
-    { id: "3", code: "BTC_USDT", name: "Bitcoin", type: "COIN", quantity: 0.85, entryPrice: 63280, currentPrice: 65140, valuation: 55369, pnl: 1581, pnlPct: 2.9, posType: "LONG" },
-    { id: "4", code: "ETH_USDT", name: "Ethereum", type: "COIN", quantity: 4.2, entryPrice: 3450, currentPrice: 3380, valuation: 14196, pnl: -294, pnlPct: -2.0, posType: "SHORT" },
-    { id: "5", code: "035720", name: "카카오", type: "STOCK", quantity: 100, entryPrice: 48500, currentPrice: 47200, valuation: 4720000, pnl: -130000, pnlPct: -2.7, score: 58 },
-  ] as HoldingItem[];
+  const items = holdings || [];
 
   const filteredItems = items.filter(item => {
     if (activeTab === "ALL") return true;
