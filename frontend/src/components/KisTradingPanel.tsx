@@ -33,6 +33,8 @@ export const KisTradingPanel: React.FC = () => {
   // Form Controls
   const [isPaper, setIsPaper] = useState<boolean>(true);
   const [cano, setCano] = useState<string>("");
+  const [realCano, setRealCano] = useState<string>("");
+  const [paperCano, setPaperCano] = useState<string>("");
   const [acntPrdtCd, setAcntPrdtCd] = useState<string>("01");
 
   // Order Inputs
@@ -56,12 +58,26 @@ export const KisTradingPanel: React.FC = () => {
       const res = await fetch("/api/kis/status");
       if (res.ok) {
         const json = await res.json();
-        setIsPaper(json.defaultModeIsPaper ?? true);
-        if (json.defaultCano) setCano(json.defaultCano);
+        const modeIsPaper = json.defaultModeIsPaper ?? true;
+        setIsPaper(modeIsPaper);
+        setRealCano(json.realCano || "");
+        setPaperCano(json.paperCano || "");
+        
+        const initialCano = modeIsPaper ? (json.paperCano || json.defaultCano) : (json.realCano || json.defaultCano);
+        if (initialCano) setCano(initialCano);
         if (json.defaultAcntPrdtCd) setAcntPrdtCd(json.defaultAcntPrdtCd);
       }
     } catch (e) {
       console.error("Failed to fetch KIS status:", e);
+    }
+  };
+
+  const handleTogglePaperMode = (paperMode: boolean) => {
+    setIsPaper(paperMode);
+    if (paperMode && paperCano) {
+      setCano(paperCano);
+    } else if (!paperMode && realCano) {
+      setCano(realCano);
     }
   };
 
@@ -195,14 +211,14 @@ export const KisTradingPanel: React.FC = () => {
           <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800">
             <button
               type="button"
-              onClick={() => setIsPaper(true)}
+              onClick={() => handleTogglePaperMode(true)}
               className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${isPaper ? "bg-amber-500 text-slate-950 shadow" : "text-slate-400 hover:text-slate-200"}`}
             >
               모의투자
             </button>
             <button
               type="button"
-              onClick={() => setIsPaper(false)}
+              onClick={() => handleTogglePaperMode(false)}
               className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${!isPaper ? "bg-emerald-500 text-slate-950 shadow" : "text-slate-400 hover:text-slate-200"}`}
             >
               실전투자

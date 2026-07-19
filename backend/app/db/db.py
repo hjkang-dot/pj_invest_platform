@@ -26,6 +26,8 @@ def migrate_db(conn):
     """
     cursor = conn.cursor()
     add_column_if_missing(cursor, "strategy_backtests", "simulated_trades", "TEXT")
+    add_column_if_missing(cursor, "daily_prices", "foreign_net_buy", "REAL DEFAULT 0.0")
+    add_column_if_missing(cursor, "daily_prices", "institution_net_buy", "REAL DEFAULT 0.0")
 
 def init_db(db_path=DB_PATH):
     """

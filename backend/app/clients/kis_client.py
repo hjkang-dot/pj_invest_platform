@@ -1,6 +1,7 @@
 import time
 import requests
 import json
+import os
 from typing import Dict, Any, Optional
 from app.core.config import Config
 
@@ -10,6 +11,7 @@ class KISClient:
     Supports both Real Trading (실전투자) and Paper Trading (모의투자).
     """
     _token_cache: Dict[str, Dict[str, Any]] = {}
+    _last_request_time: Dict[str, float] = {}
 
     def __init__(self, is_paper: Optional[bool] = None, cano: Optional[str] = None, acnt_prdt_cd: Optional[str] = None):
         self.is_paper = Config.KIS_IS_PAPER if is_paper is None else is_paper
@@ -18,31 +20,59 @@ class KISClient:
             self.app_key = Config.KIS_TEST_API_KEY or Config.KIS_API_KEY
             self.app_secret = Config.KIS_TEST_API_SECRET or Config.KIS_API_SECRET
             self.base_url = "https://openapivts.koreainvestment.com:29443"
+            self.cano = cano or Config.KIS_TEST_CANO or Config.KIS_CANO
+            self.acnt_prdt_cd = acnt_prdt_cd or Config.KIS_TEST_ACNT_PRDT_CD or "01"
         else:
             self.app_key = Config.KIS_API_KEY
             self.app_secret = Config.KIS_API_SECRET
             self.base_url = "https://openapi.koreainvestment.com:9443"
+            self.cano = cano or Config.KIS_CANO
+            self.acnt_prdt_cd = acnt_prdt_cd or Config.KIS_ACNT_PRDT_CD or "01"
 
-        self.cano = cano or Config.KIS_CANO
-        self.acnt_prdt_cd = acnt_prdt_cd or Config.KIS_ACNT_PRDT_CD or "01"
+    def _throttle_request(self):
+        """
+        Throttle paper trading requests to prevent KIS Paper Trading Rate Limit Exceeded error (Max 2 requests/sec).
+        """
+        if self.is_paper:
+            cache_key = "paper"
+            now = time.time()
+            last_t = KISClient._last_request_time.get(cache_key, 0.0)
+            elapsed = now - last_t
+            if elapsed < 0.6: # Ensure at least 600ms gap between paper requests
+                time.sleep(0.6 - elapsed)
+            KISClient._last_request_time[cache_key] = time.time()
 
     def is_configured(self) -> bool:
         return bool(self.app_key and self.app_secret)
 
     def get_access_token(self, force_refresh: bool = False) -> str:
         """
-        Fetch or return cached OAuth 2.0 Access Token from KIS.
+        Fetch or return cached OAuth 2.0 Access Token from KIS (Memory & File persistence).
         """
         if not self.is_configured():
             raise ValueError("한국투자증권 API Key 및 Secret이 설정되지 않았습니다. backend/.env 파일을 확인해주세요.")
 
         cache_key = "paper" if self.is_paper else "real"
-        cached = KISClient._token_cache.get(cache_key)
         now = time.time()
 
-        if not force_refresh and cached and cached.get("expires_at", 0) > now + 60:
+        # 1. Check in-memory cache
+        cached = KISClient._token_cache.get(cache_key)
+        if not force_refresh and cached and cached.get("expires_at", 0) > now + 120:
             return cached["access_token"]
 
+        # 2. Check file persistence cache in data/ directory
+        token_file = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "data", f"kis_{cache_key}_token.json"))
+        if not force_refresh and os.path.exists(token_file):
+            try:
+                with open(token_file, "r", encoding="utf-8") as f:
+                    file_data = json.load(f)
+                    if file_data.get("expires_at", 0) > now + 120:
+                        KISClient._token_cache[cache_key] = file_data
+                        return file_data["access_token"]
+            except Exception as e:
+                print(f"[KIS Token File Warning]: {e}")
+
+        # 3. Request new token via HTTP POST
         url = f"{self.base_url}/oauth2/tokenP"
         headers = {"content-type": "application/json; charset=UTF-8"}
         body = {
@@ -62,10 +92,20 @@ class KISClient:
         if not token:
             raise RuntimeError(f"KIS Token Response Invalid: {data}")
 
-        KISClient._token_cache[cache_key] = {
+        token_info = {
             "access_token": token,
             "expires_at": now + expires_in
         }
+        KISClient._token_cache[cache_key] = token_info
+
+        # Save to file persistence
+        try:
+            os.makedirs(os.path.dirname(token_file), exist_ok=True)
+            with open(token_file, "w", encoding="utf-8") as f:
+                json.dump(token_info, f)
+        except Exception as e:
+            print(f"[KIS Token Save Warning]: {e}")
+
         return token
 
     def get_hashkey(self, payload: Dict[str, Any]) -> str:
@@ -90,11 +130,21 @@ class KISClient:
         TR_ID: TTTC8434R (Real) / VTTC8434R (Paper)
         """
         token = self.get_access_token()
-        use_cano = (cano or self.cano).strip()
+        
+        # Smart CANO resolution
+        if self.is_paper:
+            # If specified CANO matches real CANO or is empty, use KIS_TEST_CANO
+            if not cano or (Config.KIS_CANO and cano.strip() == Config.KIS_CANO.strip()):
+                use_cano = (self.cano or Config.KIS_TEST_CANO).strip()
+            else:
+                use_cano = cano.strip()
+        else:
+            use_cano = (cano or self.cano).strip()
+
         use_acnt_cd = (acnt_prdt_cd or self.acnt_prdt_cd).strip()
 
         if not use_cano:
-            raise ValueError("계좌번호(CANO 8자리)가 지정되지 않았습니다. .env의 KIS_CANO 설정 또는 요청 파라미터를 입력해주세요.")
+            raise ValueError("계좌번호(CANO 8자리)가 지정되지 않았습니다. .env의 KIS_CANO / KIS_TEST_CANO 설정을 확인해주세요.")
 
         tr_id = "VTTC8434R" if self.is_paper else "TTTC8434R"
         url = f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-balance"
@@ -122,6 +172,7 @@ class KISClient:
             "CTX_AREA_NK100": ""
         }
 
+        self._throttle_request()
         resp = requests.get(url, headers=headers, params=params, timeout=10)
         res_json = resp.json()
 
@@ -194,11 +245,20 @@ class KISClient:
         ORDER_TYPE ("ORD_DVSN"): "00" (Limit 지정가), "01" (Market 시장가)
         """
         token = self.get_access_token()
-        use_cano = (cano or self.cano).strip()
+        
+        # Smart CANO resolution
+        if self.is_paper:
+            if not cano or (Config.KIS_CANO and cano.strip() == Config.KIS_CANO.strip()):
+                use_cano = (self.cano or Config.KIS_TEST_CANO).strip()
+            else:
+                use_cano = cano.strip()
+        else:
+            use_cano = (cano or self.cano).strip()
+
         use_acnt_cd = (acnt_prdt_cd or self.acnt_prdt_cd).strip()
 
         if not use_cano:
-            raise ValueError("계좌번호(CANO 8자리)가 필요합니다.")
+            raise ValueError("계좌번호(CANO 8자리)가 필요합니다. .env의 KIS_CANO / KIS_TEST_CANO 설정을 확인해주세요.")
 
         side_upper = side.upper()
         if side_upper not in ("BUY", "SELL"):
@@ -239,6 +299,7 @@ class KISClient:
             "hashkey": hashkey
         }
 
+        self._throttle_request()
         resp = requests.post(url, headers=headers, json=payload, timeout=10)
         res_json = resp.json()
 

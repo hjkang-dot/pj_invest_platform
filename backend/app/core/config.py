@@ -21,7 +21,9 @@ class Config:
     KIS_TEST_API_KEY = os.getenv("KIS_TEST_API_KEY", "")
     KIS_TEST_API_SECRET = os.getenv("KIS_TEST_API_SECRET", "")
     KIS_CANO = os.getenv("KIS_CANO", "")
+    KIS_TEST_CANO = os.getenv("KIS_TEST_CANO", "")
     KIS_ACNT_PRDT_CD = os.getenv("KIS_ACNT_PRDT_CD", "01")
+    KIS_TEST_ACNT_PRDT_CD = os.getenv("KIS_TEST_ACNT_PRDT_CD", "01")
     KIS_IS_PAPER = os.getenv("KIS_IS_PAPER", "true").lower() in ("true", "1", "yes")
     
     # ------------------ Telegram Notifications ------------------

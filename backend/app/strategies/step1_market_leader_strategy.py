@@ -1,0 +1,261 @@
+import pandas as pd
+import numpy as np
+import requests
+from typing import Dict, Any, List, Optional
+
+def is_common_stock(stock_name: str, stock_code: str) -> bool:
+    name = str(stock_name).strip()
+    code = str(stock_code).strip()
+    
+    if name.endswith("우") or name.endswith("우B") or name.endswith("우C") or "우(전환)" in name:
+        return False
+    if "ETF" in name or "ETN" in name or "스팩" in name or "SPAC" in name:
+        return False
+    if len(code) == 6 and code.isdigit() and code[-1] != '0':
+        if code[-1] in ('5', '7', '9', 'K', 'M'):
+            return False
+    return True
+
+def fetch_naver_investor_net_buy(stock_code: str) -> Dict[str, float]:
+    """
+    Fetch recent 1-day Foreign & Institutional Net Buy amount (in 억 원) using Naver Finance API.
+    """
+    code = str(stock_code).zfill(6)
+    url = f"https://m.stock.naver.com/api/stock/{code}/trend"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+    try:
+        res = requests.get(url, headers=headers, timeout=3)
+        if res.status_code == 200:
+            trend_data = res.json()
+            if isinstance(trend_data, list) and len(trend_data) > 0:
+                latest = trend_data[0]
+                close_p = float(latest.get("closePrice", "0").replace(",", ""))
+                f_quant_str = str(latest.get("foreignerPureBuyQuant", "0")).replace(",", "")
+                i_quant_str = str(latest.get("organPureBuyQuant", "0")).replace(",", "")
+
+                f_quant = int(f_quant_str) if f_quant_str.replace("+", "").replace("-", "").isdigit() else 0
+                i_quant = int(i_quant_str) if i_quant_str.replace("+", "").replace("-", "").isdigit() else 0
+
+                f_amt = round((f_quant * close_p) / 1e8, 1)
+                i_amt = round((i_quant * close_p) / 1e8, 1)
+
+                return {"foreign_net_buy": f_amt, "institution_net_buy": i_amt}
+    except Exception as e:
+        print(f"[Naver Net Buy Warning] {code}: {e}")
+
+    return {"foreign_net_buy": 0.0, "institution_net_buy": 0.0}
+
+def detect_step1_advanced_signals(
+    df: pd.DataFrame,
+    min_trading_value: float = 100000000000.0, # 1,000억 원
+    min_relative_return: float = 3.0,           # 시장 대비 +3.0%p
+    min_volume_ratio: float = 1.5,              # 20일 평균 대비 1.5배
+    max_dryup_ratio: float = 0.35,              # 조정일 거래량이 기준봉의 35% 이하
+    require_ma_alignment: bool = True,          # 5일선 > 20일선 정배열
+    hold_days: int = 5,                         # 진입 후 최대 보유일수
+    target_profit_pct: float = 5.0,             # 목표 익절률 +5.0%
+    stop_loss_pct: float = -4.0,                # 기본 손절률 -4.0%
+    enable_trailing_stop: bool = True,          # 트레일링 스톱 활성화
+    breakeven_trigger_pct: float = 3.0,         # +3.0% 달성 시 손절가를 본절(0%)로 상향
+    trailing_drop_pct: float = 1.5              # 고점 대비 -1.5% 밀릴 때 이익 확정
+) -> Dict[str, Any]:
+    """
+    Advanced Strategy with Trailing Stop & Investor Net Buy validation.
+    """
+    if df.empty:
+        return {"error": "Empty dataframe"}
+
+    df = df.copy()
+    df["trade_date"] = df["trade_date"].astype(str)
+    df = df.sort_values(by=["stock_code", "trade_date"]).reset_index(drop=True)
+
+    df["is_common"] = df.apply(lambda r: is_common_stock(r["stock_name"], r["stock_code"]), axis=1)
+    df = df[df["is_common"] == True].copy()
+
+    df["avg_20d_trading_value"] = df.groupby("stock_code")["trading_value"].transform(
+        lambda x: x.rolling(window=20, min_periods=5).mean()
+    )
+    df["volume_spike_ratio"] = np.where(
+        df["avg_20d_trading_value"] > 0,
+        df["trading_value"] / df["avg_20d_trading_value"],
+        1.0
+    )
+
+    mkt_returns = df.groupby(["trade_date", "market"])["change_rate"].transform("mean")
+    df["relative_return"] = df["change_rate"] - mkt_returns
+
+    df["ma5"] = df.groupby("stock_code")["close_price"].transform(
+        lambda x: x.rolling(window=5, min_periods=1).mean()
+    )
+    df["ma20"] = df.groupby("stock_code")["close_price"].transform(
+        lambda x: x.rolling(window=20, min_periods=1).mean()
+    )
+
+    df["mid_price"] = (df["open_price"] + df["close_price"]) / 2.0
+
+    trade_signals = []
+    stock_groups = df.groupby("stock_code")
+
+    for stock_code, group in stock_groups:
+        n_rows = len(group)
+        if n_rows < 25:
+            continue
+
+        dates = group["trade_date"].values
+        names = group["stock_name"].values
+        opens = group["open_price"].values
+        highs = group["high_price"].values
+        lows = group["low_price"].values
+        closes = group["close_price"].values
+        volumes = group["volume"].values
+        t_values = group["trading_value"].values
+        rel_rets = group["relative_return"].values
+        vol_spikes = group["volume_spike_ratio"].values
+        change_rates = group["change_rate"].values
+        ma5s = group["ma5"].values
+        ma20s = group["ma20"].values
+        mid_prices = group["mid_price"].values
+
+        for i in range(20, n_rows - hold_days - 2):
+            # Step 0 Breakout
+            if not (t_values[i] >= min_trading_value and
+                    rel_rets[i] >= min_relative_return and
+                    vol_spikes[i] >= min_volume_ratio and
+                    change_rates[i] > 0):
+                continue
+
+            if require_ma_alignment and ma5s[i] < ma20s[i]:
+                continue
+
+            t_date = dates[i]
+            t_name = names[i]
+            t_vol = volumes[i]
+            t_val = t_values[i]
+            t_mid = mid_prices[i]
+
+            step1_passed = False
+            entry_idx = -1
+
+            for offset in [1, 2]:
+                idx_adj = i + offset
+                if idx_adj >= n_rows:
+                    break
+                
+                vol_ratio = volumes[idx_adj] / t_vol if t_vol > 0 else 1.0
+                is_vol_dryup = vol_ratio <= max_dryup_ratio
+                is_price_supported = (closes[idx_adj] >= t_mid * 0.99) and (closes[idx_adj] >= ma5s[idx_adj] * 0.99)
+                is_bullish_trend = ma5s[idx_adj] >= ma20s[idx_adj]
+
+                if is_vol_dryup and is_price_supported and is_bullish_trend:
+                    step1_passed = True
+                    entry_idx = idx_adj + 1
+                    break
+
+            if not step1_passed or entry_idx >= n_rows:
+                continue
+
+            entry_price = float(opens[entry_idx])
+            if entry_price <= 0:
+                continue
+
+            # Trailing Stop & Exit Logic
+            current_stop_price = entry_price * (1.0 + stop_loss_pct / 100.0)
+            highest_price = entry_price
+            
+            exit_price = entry_price
+            exit_date = dates[entry_idx]
+            is_win = False
+            is_stopped = False
+            exit_reason = "holding_expired"
+
+            exit_limit = min(entry_idx + hold_days, n_rows - 1)
+
+            for k in range(entry_idx, exit_limit + 1):
+                cur_h = float(highs[k])
+                cur_l = float(lows[k])
+
+                # Update highest price reached after entry
+                if cur_h > highest_price:
+                    highest_price = cur_h
+
+                highest_ret_pct = ((highest_price - entry_price) / entry_price) * 100.0
+
+                # 1. Trailing Stop Logic: If gain >= breakeven_trigger_pct (+3%), raise stop to breakeven (entry_price)
+                if enable_trailing_stop and highest_ret_pct >= breakeven_trigger_pct:
+                    breakeven_stop = entry_price * 1.002 # Break-even + fees
+                    if current_stop_price < breakeven_stop:
+                        current_stop_price = breakeven_stop
+
+                    # Dynamic Trailing Stop: drop from peak
+                    peak_trailing_stop = highest_price * (1.0 - trailing_drop_pct / 100.0)
+                    if peak_trailing_stop > current_stop_price:
+                        current_stop_price = peak_trailing_stop
+
+                # 2. Check Stop Loss / Trailing Stop Trigger
+                if cur_l <= current_stop_price:
+                    exit_price = current_stop_price
+                    exit_date = dates[k]
+                    is_stopped = True
+                    is_win = exit_price >= entry_price
+                    exit_reason = "trailing_stop" if highest_ret_pct >= breakeven_trigger_pct else "stop_loss"
+                    break
+
+                # 3. Check Target Profit (+5.0%)
+                if cur_h >= entry_price * (1.0 + target_profit_pct / 100.0):
+                    exit_price = entry_price * (1.0 + target_profit_pct / 100.0)
+                    exit_date = dates[k]
+                    is_win = True
+                    exit_reason = "target_profit"
+                    break
+
+            if not is_stopped and not is_win:
+                exit_price = float(closes[exit_limit])
+                exit_date = dates[exit_limit]
+                is_win = exit_price >= entry_price
+                exit_reason = "holding_expired"
+
+            ret_pct = round(((exit_price - entry_price) / entry_price) * 100.0, 2)
+            max_ret_pct = round(((highest_price - entry_price) / entry_price) * 100.0, 2)
+
+            trade_signals.append({
+                "stock_code": stock_code,
+                "stock_name": t_name,
+                "base_date_t": t_date,
+                "base_trading_val": round(t_val / 1e8, 1),
+                "entry_date": dates[entry_idx],
+                "entry_price": entry_price,
+                "exit_date": exit_date,
+                "exit_price": exit_price,
+                "return_pct": ret_pct,
+                "max_possible_return": max_ret_pct,
+                "is_win": is_win,
+                "is_stopped": is_stopped,
+                "exit_reason": exit_reason
+            })
+
+    if not trade_signals:
+        return {
+            "total_trades": 0,
+            "win_rate": 0.0,
+            "avg_return_pct": 0.0,
+            "avg_max_possible_return_pct": 0.0,
+            "trades": []
+        }
+
+    res_df = pd.DataFrame(trade_signals)
+    total_trades = len(res_df)
+    win_count = int(res_df["is_win"].sum())
+    win_rate = round((win_count / total_trades) * 100.0, 1) if total_trades > 0 else 0.0
+    avg_return = round(res_df["return_pct"].mean(), 2)
+    avg_max_return = round(res_df["max_possible_return"].mean(), 2)
+
+    return {
+        "total_trades": total_trades,
+        "win_count": win_count,
+        "loss_count": int(total_trades - win_count),
+        "win_rate": win_rate,
+        "avg_return_pct": avg_return,
+        "avg_max_possible_return_pct": avg_max_return,
+        "trades": res_df.to_dict(orient="records")
+    }
