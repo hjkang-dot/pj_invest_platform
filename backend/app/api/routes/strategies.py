@@ -99,7 +99,7 @@ def get_strategy_detail_api(strategy_id: str, q: str = ""):
                 daily_prices_df=daily_prices_df,
                 stocks_df=stocks_df,
                 min_relative_return=3.0,
-                min_trading_value=30000000000.0,
+                min_trading_value=100000000000.0, # 1,000억 원 이상 진성 주도주만 선별
                 min_volume_ratio=1.5,
                 max_dryup_ratio=0.35,
                 search_query=q
@@ -111,7 +111,7 @@ def get_strategy_detail_api(strategy_id: str, q: str = ""):
                     daily_prices_df=daily_prices_df,
                     stocks_df=stocks_df,
                     min_relative_return=3.0,
-                    min_trading_value=30000000000.0,
+                    min_trading_value=100000000000.0, # 1,000억 원 이상
                     min_volume_ratio=1.5,
                     search_query=q
                 )

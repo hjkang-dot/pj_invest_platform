@@ -52,24 +52,24 @@ class KISAutoTrader:
 
     def run_daily_market_close_pipeline(self):
         """
-        Executed at 15:35 & 15:45 every trading day:
-        1. Fetch today's KRX daily price data
-        2. Detect Step 0 & Step 1 Leader Candidates for Tomorrow
+        Executed at 08:30 AM every trading day (Since API delivers yesterday's full data at 08:00 AM):
+        1. Fetch yesterday & latest KRX daily price and investor net buy data
+        2. Detect Step 0 & Step 1 Leader Candidates for Today's 09:00:10 Trading
         3. Send Telegram Briefing
         """
         today_str = datetime.now().strftime("%Y%m%d")
         if self.last_sync_date == today_str:
             return
 
-        print(f"[AutoTrader 15:35] Running daily price sync for {today_str}...")
+        print(f"[AutoTrader 08:30] Running daily price & net buy sync for {today_str}...")
         try:
             sync_krx_daily_prices(today_str)
-            print(f"[AutoTrader 15:35] KRX price sync completed for {today_str}.")
+            print(f"[AutoTrader 08:30] KRX price sync completed.")
         except Exception as e:
             print(f"[AutoTrader Error] Daily price sync failed: {e}")
-            send_telegram_message(f"<b>[⚠️ 데이터 동기화 경고]</b>\n{today_str} 당일 주가 수집 실패: {e}")
+            send_telegram_message(f"<b>[⚠️ 데이터 동기화 경고]</b>\n{today_str} 주가 수집 실패: {e}")
 
-        print(f"[AutoTrader 15:45] Screening Step 1 Leader Candidates for tomorrow...")
+        print(f"[AutoTrader 08:30] Screening Step 1 Leader Candidates for Today 09:00 Buy...")
         try:
             conn = sqlite3.connect(DB_PATH)
             df = pd.read_sql_query("SELECT * FROM daily_prices WHERE market IN ('KOSPI', 'KOSDAQ')", conn)
@@ -81,23 +81,43 @@ class KISAutoTrader:
                 min_relative_return=3.0,
                 min_volume_ratio=1.5,
                 max_dryup_ratio=0.35,
-                require_ma_alignment=True
+                require_ma_alignment=True,
+                require_net_buy=True        # ★ Step 1 외인/기관 순매수 수급 검증 필수 적용!
             )
 
             trades = res.get("trades", [])
-            # Filter candidates where base_date_t is recent
             recent_candidates = [t for t in trades if t["base_date_t"] == today_str or t["entry_date"] >= today_str]
 
-            self.pending_buy_candidates = recent_candidates[:3]
+            # Enrich candidates with Naver Foreigner/Institutional Net Buy data
+            from app.strategies.step1_market_leader_strategy import fetch_naver_investor_net_buy
+            enriched_candidates = []
+            for c in recent_candidates[:10]:
+                net = fetch_naver_investor_net_buy(c["stock_code"])
+                f_b = net.get("foreign_net_buy", 0.0)
+                i_b = net.get("institution_net_buy", 0.0)
+                # Only keep stocks with positive foreign OR institutional net buy
+                if f_b > 0 or i_b > 0 or c.get("foreign_net_buy", 0) > 0 or c.get("institution_net_buy", 0) > 0:
+                    c["foreign_net_buy"] = f_b
+                    c["institution_net_buy"] = i_b
+                    c["is_double_buy"] = (f_b > 0 and i_b > 0)
+                    enriched_candidates.append(c)
+
+            # Prioritize double buy (외인/기관 양매수)
+            enriched_candidates.sort(key=lambda x: (x.get("is_double_buy", False), x.get("return_pct", 0)), reverse=True)
+
+            self.pending_buy_candidates = enriched_candidates[:3]
             self.last_sync_date = today_str
 
             # Briefing to Telegram
             if self.pending_buy_candidates:
-                candidate_names = ", ".join([f"{c['stock_name']}({c['stock_code']})" for c in self.pending_buy_candidates])
+                candidate_names = ", ".join([
+                    f"{c['stock_name']}({c['stock_code']}) [외인:{c.get('foreign_net_buy', 0)}억/기관:{c.get('institution_net_buy', 0)}억]" 
+                    for c in self.pending_buy_candidates
+                ])
                 send_telegram_message(
                     f"<b>[📋 15:45 익일 매수 후보 포착 완료]</b>\n\n"
                     f"• <b>내일 09:00 매수 예정 종목</b>: {candidate_names}\n"
-                    f"• <b>검증 기준</b>: 거래대금 1,000억+ & 정배열 & 거래량 35% 감소 지지\n"
+                    f"• <b>검증 기준</b>: 1,000억+ 거래대금 & 정배열 & 거래량 35% 감소 & <b>외인/기관 수급 유입</b>\n"
                     f"💡 <i>09:00:10 시초가 잔여 5슬롯 한도 내에서 KIS 자동 매수가 실행됩니다.</i>"
                 )
             else:
@@ -321,8 +341,8 @@ async def auto_trader_background_loop():
             if "09:01" <= cur_time_str <= "15:20":
                 auto_trader.monitor_intraday_trailing_stops()
 
-            # C. Market Close Daily Price Sync & Screening (15:35 ~ 15:45)
-            if cur_time_str == "15:35":
+            # C. Morning Daily Price Sync & Screening Pipeline (08:30 AM before market open)
+            if cur_time_str == "08:30":
                 auto_trader.run_daily_market_close_pipeline()
 
         except Exception as e:

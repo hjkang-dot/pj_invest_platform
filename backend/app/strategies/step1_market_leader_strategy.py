@@ -11,6 +11,11 @@ def is_common_stock(stock_name: str, stock_code: str) -> bool:
         return False
     if "ETF" in name or "ETN" in name or "스팩" in name or "SPAC" in name:
         return False
+    # Exclude trading halted & risk keywords
+    risk_keywords = ["관리", "정지", "환기", "유의", "상장폐지", "정리매매"]
+    if any(kw in name for kw in risk_keywords):
+        return False
+
     if len(code) == 6 and code.isdigit() and code[-1] != '0':
         if code[-1] in ('5', '7', '9', 'K', 'M'):
             return False
@@ -53,6 +58,7 @@ def detect_step1_advanced_signals(
     min_volume_ratio: float = 1.5,              # 20일 평균 대비 1.5배
     max_dryup_ratio: float = 0.35,              # 조정일 거래량이 기준봉의 35% 이하
     require_ma_alignment: bool = True,          # 5일선 > 20일선 정배열
+    require_net_buy: bool = True,               # Step 1 외인/기관 순매수 수급 검증
     hold_days: int = 5,                         # 진입 후 최대 보유일수
     target_profit_pct: float = 5.0,             # 목표 익절률 +5.0%
     stop_loss_pct: float = -4.0,                # 기본 손절률 -4.0%
@@ -91,8 +97,13 @@ def detect_step1_advanced_signals(
     df["ma20"] = df.groupby("stock_code")["close_price"].transform(
         lambda x: x.rolling(window=20, min_periods=1).mean()
     )
-
     df["mid_price"] = (df["open_price"] + df["close_price"]) / 2.0
+
+    # Ensure net buy columns exist
+    if "foreign_net_buy" not in df.columns:
+        df["foreign_net_buy"] = 0.0
+    if "institution_net_buy" not in df.columns:
+        df["institution_net_buy"] = 0.0
 
     trade_signals = []
     stock_groups = df.groupby("stock_code")
@@ -116,6 +127,8 @@ def detect_step1_advanced_signals(
         ma5s = group["ma5"].values
         ma20s = group["ma20"].values
         mid_prices = group["mid_price"].values
+        f_buys = group["foreign_net_buy"].values
+        i_buys = group["institution_net_buy"].values
 
         for i in range(20, n_rows - hold_days - 2):
             # Step 0 Breakout
@@ -146,8 +159,16 @@ def detect_step1_advanced_signals(
                 is_vol_dryup = vol_ratio <= max_dryup_ratio
                 is_price_supported = (closes[idx_adj] >= t_mid * 0.99) and (closes[idx_adj] >= ma5s[idx_adj] * 0.99)
                 is_bullish_trend = ma5s[idx_adj] >= ma20s[idx_adj]
+                
+                # Investor Net Buy Filter (Foreign > 0 OR Institution > 0)
+                is_net_buy_ok = True
+                if require_net_buy:
+                    f_b = f_buys[idx_adj] if idx_adj < len(f_buys) else 0
+                    i_b = i_buys[idx_adj] if idx_adj < len(i_buys) else 0
+                    # Standard: Allow if either foreign or institution net buy > 0, or base breakout had strong net buy
+                    is_net_buy_ok = (f_b >= 0 or i_b >= 0)
 
-                if is_vol_dryup and is_price_supported and is_bullish_trend:
+                if is_vol_dryup and is_price_supported and is_bullish_trend and is_net_buy_ok:
                     step1_passed = True
                     entry_idx = idx_adj + 1
                     break
@@ -263,7 +284,7 @@ def detect_step1_advanced_signals(
 def screen_step1_entry_candidates(
     daily_prices_df: pd.DataFrame,
     stocks_df: Optional[pd.DataFrame] = None,
-    min_trading_value: float = 30000000000.0, # 300억 원 이상
+    min_trading_value: float = 100000000000.0, # 1,000억 원 이상
     min_relative_return: float = 3.0,          # +3.0%p 이상
     min_volume_ratio: float = 1.5,             # 1.5배 이상
     max_dryup_ratio: float = 0.35,             # 조정일 거래량 <= 35%
@@ -283,6 +304,13 @@ def screen_step1_entry_candidates(
     df = daily_prices_df.copy()
     df["trade_date"] = df["trade_date"].astype(str)
     df = df.sort_values(by=["stock_code", "trade_date"]).reset_index(drop=True)
+
+    df["close_price"] = pd.to_numeric(df["close_price"], errors="coerce")
+    df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
+    df["trading_value"] = pd.to_numeric(df["trading_value"], errors="coerce")
+
+    # Exclude trading halted stocks (volume <= 0 or trading_value <= 0)
+    df = df[(df["volume"] > 0) & (df["trading_value"] > 0)].copy()
 
     df["is_common"] = df.apply(lambda r: is_common_stock(r["stock_name"], r["stock_code"]), axis=1)
     df = df[df["is_common"] == True].copy()

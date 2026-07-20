@@ -4,7 +4,7 @@ from typing import Dict, Any, List, Optional
 
 def is_common_stock(stock_name: str, stock_code: str) -> bool:
     """
-    Check if stock is common stock (exclude priority shares, ETFs, ETNs, SPACs).
+    Check if stock is common stock (exclude priority shares, ETFs, ETNs, SPACs, Trading Halted, Risk stocks).
     """
     name = str(stock_name).strip()
     code = str(stock_code).strip()
@@ -13,6 +13,11 @@ def is_common_stock(stock_name: str, stock_code: str) -> bool:
         return False
     if "ETF" in name or "ETN" in name or "스팩" in name or "SPAC" in name:
         return False
+    # Filter trading halted / risk keywords
+    risk_keywords = ["관리", "정지", "환기", "유의", "상장폐지", "정리매매"]
+    if any(kw in name for kw in risk_keywords):
+        return False
+
     if len(code) == 6 and code.isdigit() and code[-1] != '0':
         if code[-1] in ('5', '7', '9', 'K', 'M'):
             return False
@@ -48,8 +53,12 @@ def screen_step0_market_leaders(
     df["close_price"] = pd.to_numeric(df["close_price"], errors="coerce")
     df["change_rate"] = pd.to_numeric(df["change_rate"], errors="coerce")
     df["trading_value"] = pd.to_numeric(df["trading_value"], errors="coerce")
+    df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
 
-    # Filter common stocks
+    # Exclude trading halted stocks (volume <= 0 or trading_value <= 0)
+    df = df[(df["volume"] > 0) & (df["trading_value"] > 0)].copy()
+
+    # Filter common stocks & risk stocks
     df["is_common"] = df.apply(lambda r: is_common_stock(r["stock_name"], r["stock_code"]), axis=1)
     df = df[df["is_common"] == True]
 
